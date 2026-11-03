@@ -53,7 +53,7 @@ export class PermitStackProvider implements PermitProvider {
     for (const [k, v] of Object.entries(params ?? {})) if (v) url.searchParams.set(k, v);
     const res = await fetch(url, {
       headers: { "X-API-Key": this.apiKey, Accept: "application/json" },
-      next: { revalidate: 3600 }, // cache identical lookups for an hour to save quota
+      cache: "no-store", // always fresh; avoids serving responses cached under an old key/plan
     });
     const body = await res.json().catch(() => null);
     if (!res.ok) {

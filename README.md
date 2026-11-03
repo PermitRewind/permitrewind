@@ -41,7 +41,7 @@ npm run build && npm start   # production
 
 - Search uses `GET /v1/permits/search` with `state=FL` plus `address` / `parcel` / `permit_number`; results are filtered to the configured Polk jurisdictions.
 - Current key is on the **Indie** plan (1,000 requests/day, full history). The **free tier** allows 100 requests/day and only the last 30 days; Date filters older than that return HTTP 403 `feature_locked`
-  on free keys older date filters return HTTP 403 `feature_locked` (shown to the user as a clear message). The 30-day notice in results only appears when the API reports a tier window. Responses are cached for 1 hour to save quota.
+  on free keys older date filters return HTTP 403 `feature_locked` (shown to the user as a clear message). The 30-day notice in results only appears when the API reports a tier window. Responses are not cached (each search is one API request).
 - Polk County records currently have `parcel_id: null`, so parcel search will usually return nothing until the source publishes parcels.
 
 ## Deploying to Vercel
