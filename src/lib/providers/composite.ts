@@ -3,6 +3,17 @@ import type { PermitProvider } from "./types";
 import { Permit, SearchQuery, SearchResult } from "../types";
 
 const norm = (n?: string | null) => (n ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+/** Dedupe keys: the permit number, plus legacy Hansen digits for "BLD-H-200423"-style numbers (scoped to address). */
+function keys(p: Permit): string[] {
+  const k = norm(p.permitNumber);
+  if (!k) return [];
+  const addr = norm(p.address).replace(/^(\d+).*$/, "$1");
+  const out = [k];
+  const legacy = (p.permitNumber ?? "").toUpperCase().match(/^[A-Z]+-H-(\d+)$/)?.[1];
+  if (legacy) out.push(`L${legacy}@${addr}`);
+  else if (/^\d+$/.test(k)) out.push(`L${k}@${addr}`);
+  return out;
+}
 
 function applyFilters(p: Permit, q: SearchQuery): boolean {
   const d = p.dateIssued ?? p.dateFiled;
@@ -33,18 +44,22 @@ export class CompositeProvider implements PermitProvider {
     let total: number | null = 0;
 
     const add = (p: Permit) => {
-      const k = norm(p.permitNumber);
-      const existing = k ? byNum.get(k) : undefined;
+      const ks = keys(p);
+      const existing = ks.map((k) => byNum.get(k)).find(Boolean);
       if (existing) {
         if (p.source && p.source !== existing.source) existing.alsoIn = [...(existing.alsoIn ?? []), p.source];
         existing.sourceUrl ??= p.sourceUrl;
         existing.contractorName ??= p.contractorName;
         existing.contractorLicense ??= p.contractorLicense;
         existing.estimatedValue ??= p.estimatedValue;
+        existing.dateIssued ??= p.dateIssued;
+        existing.dateCompleted ??= p.dateCompleted;
+        existing.parcelId ??= p.parcelId;
+        if (p.permitNumber && norm(p.permitNumber) !== norm(existing.permitNumber)) existing.description = [existing.description, `(also recorded as #${p.permitNumber})`].filter(Boolean).join(" ");
         existing.status = existing.status && existing.status !== "UNKNOWN" ? existing.status : p.status;
         return;
       }
-      if (k) byNum.set(k, p);
+      ks.forEach((k) => byNum.set(k, p));
       merged.push(p);
     };
 

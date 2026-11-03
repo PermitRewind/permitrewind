@@ -61,3 +61,22 @@ permit number, parses the results grid (up to 5 pages), and links each record to
 and shows a notice instead of failing if the county portal is slow (12 s timeout) or down.
 Disable with `POLK_ACCELA_ENABLED=false`. City-issued permits (Lakeland, Bartow, etc.) and pre-2010 scanned
 county records (ERecords) are not in Accela.
+
+## Third source: Polk County Property Appraiser permit file
+
+The Property Appraiser publishes `ftp_permit.zip` daily (layout:
+https://www.polkflpa.gov/PCPA_FTP_DATA_HELP/FTP_PERMITFileLayout.html). It covers permits from the county
+and every city that can change taxable value (new homes, additions, pools, etc.), back to the 1990s, but
+not re-roofs, most trade work, or contractor names. `src/lib/providers/polk-pa.ts` reads it, labeled
+"Property Appraiser", and dedupes against the others by permit number (legacy `200423` = `BLD-H-200423`
+at the same house number).
+
+Refresh (download the zip in a browser from the PA's FTP page; their firewall blocks scripts):
+
+```bash
+python3 scripts/build-pa-permits.py /path/to/ftp_permit.zip   # writes data/pa/*.json.gz (~25 MB)
+```
+
+`data/pa/` is gitignored (regenerated daily), so it must be present locally when deploying
+(it is bundled via `outputFileTracingIncludes` in `next.config.ts`). If it's missing, that source
+simply returns nothing. Disable with `POLK_PA_ENABLED=false`.
