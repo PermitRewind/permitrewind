@@ -50,3 +50,14 @@ npm run build && npm start   # production
 2. Project Settings → Environment Variables: add `PERMITSTACK_API_KEY` (Production + Preview), marked Sensitive.
 3. Deploy; preview URLs are created per branch/PR.
 4. Custom domain: add `permitrewind.com` in Vercel → Domains, then at GoDaddy set an `A` record `@ → 76.76.21.21` and `CNAME www → cname.vercel-dns.com` (or follow the values Vercel shows).
+
+## Second source: Polk County Accela
+
+`src/lib/providers/polk-accela.ts` searches Polk County BOCC's public Accela Citizen Access portal
+(https://aca-prod.accela.com/POLKCO; unincorporated Polk building permits, 2010+) the way a browser does
+(anonymous GET + form postback, no login or captcha) by street number + street name, parcel number, or
+permit number, parses the results grid (up to 5 pages), and links each record to its county detail page.
+`composite.ts` runs PermitStack and Accela in parallel, dedupes by permit number, labels each row's source,
+and shows a notice instead of failing if the county portal is slow (12 s timeout) or down.
+Disable with `POLK_ACCELA_ENABLED=false`. City-issued permits (Lakeland, Bartow, etc.) and pre-2010 scanned
+county records (ERecords) are not in Accela.

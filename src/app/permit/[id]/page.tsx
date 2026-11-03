@@ -30,6 +30,7 @@ export default async function PermitPage({ params }: { params: Promise<{ id: str
     ["Owner", p.ownerName],
     ["Square footage", p.squareFootage],
     ["Stories / units", p.stories || p.units ? `${p.stories ?? "—"} / ${p.units ?? "—"}` : null],
+    ["Source", p.source],
     ["Record kind", p.recordKind ? fmtLabel(p.recordKind) : null],
   ];
 

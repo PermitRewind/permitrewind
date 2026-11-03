@@ -38,6 +38,7 @@ function mapPermit(r: any): Permit {
     latitude: r.latitude ?? null,
     longitude: r.longitude ?? null,
     recordKind: r.record_kind ?? null,
+    source: "PermitStack",
   };
 }
 

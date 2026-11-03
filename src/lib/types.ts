@@ -30,6 +30,12 @@ export interface Permit {
   latitude: number | null;
   longitude: number | null;
   recordKind?: string | null;
+  /** Data source label, e.g. "PermitStack" or "Polk County Accela". */
+  source?: string;
+  /** Link to the record on the source's own site, when available. */
+  sourceUrl?: string | null;
+  /** Other sources that also returned this permit (after merge). */
+  alsoIn?: string[];
 }
 
 export interface SearchQuery {

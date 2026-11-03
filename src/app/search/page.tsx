@@ -4,7 +4,7 @@ import SearchForm from "@/components/SearchForm";
 import ResultsActions from "@/components/ResultsActions";
 import { getProvider } from "@/lib/providers";
 import { DEFAULT_REGION, PERMIT_CATEGORIES, PERMIT_STATUSES, regionCities } from "@/lib/jurisdictions";
-import { ProviderError, SearchMode, SearchQuery, SearchResult } from "@/lib/types";
+import { Permit, ProviderError, SearchMode, SearchQuery, SearchResult } from "@/lib/types";
 import { bestDate, fmtDate, fmtLabel, statusColor } from "@/lib/format";
 
 export const metadata: Metadata = { title: "Search results" };
@@ -103,17 +103,18 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
               <div className="hidden md:block overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
                 <table className="w-full text-sm">
                   <thead className="bg-slate-100 text-left text-slate-600">
-                    <tr>{["Date", "Permit #", "Type", "Status", "Description", "Address"].map((h) => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr>
+                    <tr>{["Date", "Permit #", "Type", "Status", "Description", "Address", "Source"].map((h) => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {result.permits.map((p) => (
                       <tr key={p.id} className="hover:bg-navy-50 align-top">
                         <td className="px-3 py-2 whitespace-nowrap">{fmtDate(bestDate(p))}</td>
-                        <td className="px-3 py-2 whitespace-nowrap"><Link className="text-navy-600 font-medium hover:underline" href={`/permit/${p.id}`}>{p.permitNumber ?? "View"}</Link></td>
+                        <td className="px-3 py-2 whitespace-nowrap"><PermitLink p={p} className="text-navy-600 font-medium hover:underline" /></td>
                         <td className="px-3 py-2">{fmtLabel(p.category)}</td>
                         <td className="px-3 py-2"><span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusColor(p.status)}`}>{fmtLabel(p.status)}</span></td>
                         <td className="px-3 py-2 max-w-md">{p.description ?? "—"}</td>
                         <td className="px-3 py-2">{p.address}{p.city ? `, ${p.city}` : ""}</td>
+                        <td className="px-3 py-2 text-xs text-slate-500">{sourceLabel(p)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -122,9 +123,9 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
               <ul className="md:hidden space-y-3">
                 {result.permits.map((p) => (
                   <li key={p.id}>
-                    <Link href={`/permit/${p.id}`} className="block rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                    <div className="block rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
                       <div className="flex justify-between text-sm">
-                        <span className="font-semibold text-navy-700">{p.permitNumber}</span>
+                        <PermitLink p={p} className="font-semibold text-navy-700 underline" />
                         <span className="text-slate-500">{fmtDate(bestDate(p))}</span>
                       </div>
                       <div className="mt-1 flex gap-2 items-center text-xs">
@@ -132,8 +133,8 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
                         <span className={`rounded-full px-2 py-0.5 ${statusColor(p.status)}`}>{fmtLabel(p.status)}</span>
                       </div>
                       <p className="mt-2 text-sm text-slate-700 line-clamp-2">{p.description}</p>
-                      <p className="mt-1 text-xs text-slate-500">{p.address}, {p.city}</p>
-                    </Link>
+                      <p className="mt-1 text-xs text-slate-500">{p.address}, {p.city} · {sourceLabel(p)}</p>
+                    </div>
                   </li>
                 ))}
               </ul>
@@ -143,6 +144,17 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
       )}
     </div>
   );
+}
+
+function sourceLabel(p: Permit) {
+  return [p.source, ...(p.alsoIn ?? [])].filter(Boolean).join(" + ");
+}
+
+function PermitLink({ p, className }: { p: Permit; className: string }) {
+  if (p.id.startsWith("polk-accela:")) {
+    return p.sourceUrl ? <a className={className} href={p.sourceUrl} target="_blank" rel="noopener noreferrer">{p.permitNumber} ↗</a> : <span>{p.permitNumber}</span>;
+  }
+  return <Link className={className} href={`/permit/${p.id}`}>{p.permitNumber ?? "View"}</Link>;
 }
 
 function State({ title, body, tone }: { title: string; body: string; tone?: "error" }) {
