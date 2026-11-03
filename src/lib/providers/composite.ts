@@ -38,6 +38,9 @@ export class CompositeProvider implements PermitProvider {
       if (existing) {
         if (p.source && p.source !== existing.source) existing.alsoIn = [...(existing.alsoIn ?? []), p.source];
         existing.sourceUrl ??= p.sourceUrl;
+        existing.contractorName ??= p.contractorName;
+        existing.contractorLicense ??= p.contractorLicense;
+        existing.estimatedValue ??= p.estimatedValue;
         existing.status = existing.status && existing.status !== "UNKNOWN" ? existing.status : p.status;
         return;
       }

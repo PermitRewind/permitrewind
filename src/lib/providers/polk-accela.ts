@@ -13,6 +13,16 @@ const SEARCH_URL = `${ORIGIN}/POLKCO/Cap/CapHome.aspx?module=Building&TabName=Bu
 const P = "ctl00$PlaceHolderMain$generalSearchForm$";
 const MAX_PAGES = 5;
 const SOURCE = "Polk County Accela";
+const DETAIL_LIMIT = 15; // max detail pages fetched per search
+const DETAIL_CONCURRENCY = 5;
+const DETAIL_TIMEOUT_MS = 6000;
+type Detail = { contractor: string | null; license: string | null; value: number | null; type: string | null };
+const detailCache = new Map<string, Detail>();
+
+/** Non-construction record types (lien/permit search requests etc.). */
+export function isOtherRecord(num?: string | null, type?: string | null) {
+  return /^BPS-/i.test(num ?? "") || /permit search request|lien search/i.test(type ?? "");
+}
 
 const SUFFIXES = new Set(["DR","DRIVE","ST","STREET","AVE","AVENUE","RD","ROAD","LN","LANE","CT","COURT","BLVD","CIR","CIRCLE","WAY","PL","PLACE","TER","TRL","TRAIL","PKWY","HWY","LOOP","RUN","PATH","PT","CV","XING","SQ"]);
 const DIRS = new Set(["N","S","E","W","NE","NW","SE","SW","NORTH","SOUTH","EAST","WEST"]);
@@ -174,9 +184,43 @@ export class PolkAccelaProvider implements PermitProvider {
       d2["__EVENTARGUMENT"] = "";
       html = await this.fetchPage(cookies, new URLSearchParams(d2), signal);
     }
+    // Enrich in parallel (capped), never failing the search.
+    const dsig = AbortSignal.timeout(DETAIL_TIMEOUT_MS);
+    const queue = permits.filter((p) => !isOtherRecord(p.permitNumber, p.category)).slice(0, DETAIL_LIMIT);
+    await Promise.all(Array.from({ length: DETAIL_CONCURRENCY }, async () => {
+      for (let p = queue.shift(); p; p = queue.shift()) await this.enrich(p, dsig).catch(() => {});
+    }));
+    for (const p of permits) if (isOtherRecord(p.permitNumber, p.category)) p.recordKind = "other";
     const notices: string[] = [];
     if (total != null && total > permits.length) notices.push(`Polk County portal has ${total} matching records; showing the first ${permits.length}.`);
     return { permits, total: total ?? permits.length, page: 1, perPage: permits.length, notices };
+  }
+
+  /** Fetch a record's detail page for contractor, license, job value and full type. Cached in memory. */
+  private async enrich(p: Permit, signal: AbortSignal): Promise<void> {
+    if (!p.sourceUrl) return;
+    let d = detailCache.get(p.sourceUrl);
+    if (!d) {
+      const res = await fetch(p.sourceUrl, { signal, cache: "no-store", headers: { "User-Agent": "Mozilla/5.0 (compatible; PermitRewind/1.0)" } });
+      if (!res.ok) return;
+      const $ = cheerio.load(await res.text());
+      const lp = $("#tbl_licensedps").find("td").eq(1).html() ?? "";
+      const lines = lp.split(/<br\s*\/?>/i).map((l) => cheerio.load(l).text().replace(/\s+/g, " ").trim()).filter(Boolean);
+      const lic = lines.map((l) => l.match(/\b([A-Z]{2,3}\d{5,8})\b/)?.[1]).find(Boolean) ?? null;
+      const val = $.root().text().match(/Job Value\(\$\):\s*\$?([\d,]+(?:\.\d+)?)/)?.[1];
+      d = {
+        contractor: lines[1] ?? (lines[0] ? lines[0].replace(/\S+@\S+/, "").trim() : null) ?? null,
+        license: lic,
+        value: val ? Number(val.replace(/,/g, "")) : null,
+        type: $("#ctl00_PlaceHolderMain_lblPermitType").text().trim() || null,
+      };
+      if (detailCache.size > 2000) detailCache.clear();
+      detailCache.set(p.sourceUrl, d);
+    }
+    p.contractorName ??= d.contractor;
+    p.contractorLicense ??= d.license;
+    p.estimatedValue ??= d.value;
+    if (d.type) p.category = d.type;
   }
 
   async getPermit(): Promise<Permit | null> {

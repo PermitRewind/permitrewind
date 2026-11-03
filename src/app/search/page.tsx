@@ -28,6 +28,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
 
   let result: SearchResult | null = null;
   let error: string | null = null;
+  let otherCount = 0;
   if (query.q.trim().length >= 2) {
     try {
       result = await getProvider().search(query);
@@ -37,6 +38,12 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
     }
   }
 
+  const showOther = one(sp.other) !== "hide";
+  if (result) {
+    const isOther = (p: Permit) => p.recordKind === "other";
+    otherCount = result.permits.filter(isOther).length;
+    if (!showOther) result = { ...result, permits: result.permits.filter((p) => !isOther(p)) };
+  }
   const sel = "rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm";
   const modeLabel = { address: "Address", parcel: "Parcel", permit: "Permit #" }[mode];
 
@@ -44,7 +51,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
     <div className="mx-auto max-w-6xl px-4 py-6">
       <div className="rounded-xl bg-white border border-slate-200 p-4 shadow-sm no-print">
         <SearchForm initialMode={mode} initialQ={query.q} compact />
-        <form method="get" className="mt-4 grid grid-cols-2 md:grid-cols-6 gap-2 items-end text-sm">
+        <form method="get" className="mt-4 grid grid-cols-2 md:grid-cols-7 gap-2 items-end text-sm">
           <input type="hidden" name="mode" value={mode} />
           <input type="hidden" name="q" value={query.q} />
           <label className="flex flex-col gap-1">City
@@ -61,6 +68,11 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
             <select name="status" defaultValue={query.status} className={sel}>
               <option value="">Any status</option>
               {PERMIT_STATUSES.map((s) => <option key={s} value={s}>{fmtLabel(s)}</option>)}
+            </select></label>
+          <label className="flex flex-col gap-1">Other records
+            <select name="other" defaultValue={showOther ? "" : "hide"} className={sel}>
+              <option value="">Show (lien/permit searches)</option>
+              <option value="hide">Hide</option>
             </select></label>
           <label className="flex flex-col gap-1">From
             <input type="date" name="from" defaultValue={query.dateFrom} className={sel} /></label>
@@ -93,6 +105,9 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
             </h1>
             <ResultsActions permits={result.permits} filename={`permits-${query.q.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.csv`} />
           </div>
+          {otherCount > 0 && (
+            <p className="mb-3 text-sm text-slate-600">{showOther ? `Includes ${otherCount} other record(s) (e.g. lien/permit search requests), labeled "Other record". Use the Other records filter to hide them.` : `${otherCount} other record(s) (lien/permit search requests) hidden by filter.`}</p>
+          )}
           {result.notices.map((n) => (
             <p key={n} className="mb-3 rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-900">{n}</p>
           ))}
@@ -110,7 +125,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
                       <tr key={p.id} className="hover:bg-navy-50 align-top">
                         <td className="px-3 py-2 whitespace-nowrap">{fmtDate(bestDate(p))}</td>
                         <td className="px-3 py-2 whitespace-nowrap"><PermitLink p={p} className="text-navy-600 font-medium hover:underline" /></td>
-                        <td className="px-3 py-2">{fmtLabel(p.category)}</td>
+                        <td className="px-3 py-2">{p.recordKind === "other" ? <span className="rounded bg-slate-200 px-1.5 py-0.5 text-xs font-medium text-slate-700">Other record</span> : null} {fmtLabel(p.category)}{p.contractorName ? <div className="text-xs text-slate-500">{p.contractorName}{p.estimatedValue != null ? ` · $${p.estimatedValue.toLocaleString("en-US")}` : ""}</div> : null}</td>
                         <td className="px-3 py-2"><span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusColor(p.status)}`}>{fmtLabel(p.status)}</span></td>
                         <td className="px-3 py-2 max-w-md">{p.description ?? "—"}</td>
                         <td className="px-3 py-2">{p.address}{p.city ? `, ${p.city}` : ""}</td>
