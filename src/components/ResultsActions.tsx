@@ -9,8 +9,8 @@ function csvCell(v: unknown) {
 export default function ResultsActions({ permits, filename }: { permits: Permit[]; filename: string }) {
   function exportCsv() {
     const cols: [string, (p: Permit) => unknown][] = [
-      ["Permit Number", (p) => p.permitNumber], ["Date Filed", (p) => p.dateFiled], ["Date Issued", (p) => p.dateIssued],
-      ["Date Completed", (p) => p.dateCompleted], ["Category", (p) => p.category], ["Status", (p) => p.status],
+      ["Permit Number", (p) => p.permitNumber], ["Permit Issue Date", (p) => p.dateIssued ?? p.dateFiled],
+      ["Permit Final Date", (p) => p.dateCompleted ?? "-"], ["Date Filed", (p) => p.dateFiled], ["Category", (p) => p.category], ["Status", (p) => p.status],
       ["Description", (p) => p.description], ["Address", (p) => p.address], ["City", (p) => p.city], ["Zip", (p) => p.zip],
       ["Parcel", (p) => p.parcelId], ["Jurisdiction", (p) => p.jurisdiction], ["Contractor", (p) => p.contractorName], ["Contractor License", (p) => p.contractorLicense], ["Record Kind", (p) => (p.recordKind === "other" ? "Other record" : "Permit")],
       ["Estimated Value", (p) => p.estimatedValue], ["Source", (p) => [p.source, ...(p.alsoIn ?? [])].filter(Boolean).join(" + ")], ["Source URL", (p) => p.sourceUrl],

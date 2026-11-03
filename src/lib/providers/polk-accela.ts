@@ -15,8 +15,8 @@ const MAX_PAGES = 5;
 const SOURCE = "Polk County Accela";
 const DETAIL_LIMIT = 15; // max detail pages fetched per search
 const DETAIL_CONCURRENCY = 5;
-const DETAIL_TIMEOUT_MS = 6000;
-type Detail = { contractor: string | null; license: string | null; value: number | null; type: string | null };
+const DETAIL_TIMEOUT_MS = 8000;
+type Detail = { contractor: string | null; license: string | null; value: number | null; type: string | null; final: string | null };
 const detailCache = new Map<string, Detail>();
 
 /** Non-construction record types (lien/permit search requests etc.). */
@@ -164,8 +164,8 @@ export class PolkAccelaProvider implements PermitProvider {
           zip: am?.[3] ?? null,
           parcelId: null,
           jurisdiction: "Polk County",
-          dateFiled: date,
-          dateIssued: null,
+          dateFiled: null,
+          dateIssued: date, // grid "Date" (record date) shown as the permit issue date
           dateCompleted: null,
           estimatedValue: null,
           contractorName: null,
@@ -201,9 +201,28 @@ export class PolkAccelaProvider implements PermitProvider {
     if (!p.sourceUrl) return;
     let d = detailCache.get(p.sourceUrl);
     if (!d) {
-      const res = await fetch(p.sourceUrl, { signal, cache: "no-store", headers: { "User-Agent": "Mozilla/5.0 (compatible; PermitRewind/1.0)" } });
+      const cookies: string[] = [];
+      const ua = "Mozilla/5.0 (compatible; PermitRewind/1.0; +https://permitrewind.com)";
+      const res = await fetch(p.sourceUrl, { signal, cache: "no-store", headers: { "User-Agent": ua } });
       if (!res.ok) return;
+      for (const c of res.headers.getSetCookie?.() ?? []) cookies.push(c.split(";")[0]);
       const $ = cheerio.load(await res.text());
+      // Finaled date: latest passed "... Final" inspection (Inspections tab is loaded by a postback).
+      let finalDate: string | null = null;
+      try {
+        const form = formFields($);
+        form["__EVENTTARGET"] = "ctl00$PlaceHolderMain$InspectionList$btnRefreshGridView";
+        form["__EVENTARGUMENT"] = "";
+        const ir = await fetch(p.sourceUrl, {
+          method: "POST", signal, cache: "no-store", body: new URLSearchParams(form),
+          headers: { "User-Agent": ua, Referer: p.sourceUrl, Origin: ORIGIN, "Content-Type": "application/x-www-form-urlencoded", Cookie: cookies.join("; ") },
+        });
+        const txt = cheerio.load(await ir.text()).root().text().replace(/\s+/g, " ");
+        const dates = [...txt.matchAll(/Final\s*\(\d+\)\s*-\s*Passed\s*Result by:.*? on (\d{2}\/\d{2}\/\d{4})/g)].map((m) => toIso(m[1])).filter((x): x is string => !!x);
+        finalDate = dates.sort().pop() ?? null;
+      } catch {
+        /* inspections unavailable; keep other details */
+      }
       const lp = $("#tbl_licensedps").find("td").eq(1).html() ?? "";
       const lines = lp.split(/<br\s*\/?>/i).map((l) => cheerio.load(l).text().replace(/\s+/g, " ").trim()).filter(Boolean);
       const lic = lines.map((l) => l.match(/\b([A-Z]{2,3}\d{5,8})\b/)?.[1]).find(Boolean) ?? null;
@@ -213,6 +232,7 @@ export class PolkAccelaProvider implements PermitProvider {
         license: lic,
         value: val ? Number(val.replace(/,/g, "")) : null,
         type: $("#ctl00_PlaceHolderMain_lblPermitType").text().trim() || null,
+        final: finalDate,
       };
       if (detailCache.size > 2000) detailCache.clear();
       detailCache.set(p.sourceUrl, d);
@@ -221,6 +241,7 @@ export class PolkAccelaProvider implements PermitProvider {
     p.contractorLicense ??= d.license;
     p.estimatedValue ??= d.value;
     if (d.type) p.category = d.type;
+    if (d.final) p.dateCompleted = d.final;
   }
 
   async getPermit(): Promise<Permit | null> {

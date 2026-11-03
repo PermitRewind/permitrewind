@@ -22,3 +22,8 @@ export function statusColor(s?: string | null) {
     default: return "bg-slate-100 text-slate-700";
   }
 }
+
+/** Permit Issue Date: issued date, else the record/filed date. */
+export const issueDate = (p: { dateIssued: string | null; dateFiled: string | null }) => p.dateIssued ?? p.dateFiled;
+/** Permit Final Date (finaled / completed). */
+export const finalDate = (p: { dateCompleted: string | null }) => p.dateCompleted;

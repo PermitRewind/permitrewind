@@ -14,9 +14,9 @@ export default async function PermitPage({ params }: { params: Promise<{ id: str
     ["Type / category", fmtLabel(p.category)],
     ["Tags", p.tags.length ? p.tags.map(fmtLabel).join(", ") : null],
     ["Status", fmtLabel(p.status)],
-    ["Date filed", fmtDate(p.dateFiled)],
-    ["Date issued", fmtDate(p.dateIssued)],
-    ["Date completed", fmtDate(p.dateCompleted)],
+    ["Permit Issue Date", fmtDate(p.dateIssued ?? p.dateFiled)],
+    ["Permit Final Date", fmtDate(p.dateCompleted)],
+    ["Date filed", p.dateFiled && p.dateIssued ? fmtDate(p.dateFiled) : null],
     ["Date expired", p.dateExpired ? fmtDate(p.dateExpired) : null],
     ["Address", [p.address, p.city, p.state, p.zip].filter(Boolean).join(", ")],
     ["Parcel ID", p.parcelId],
@@ -48,7 +48,7 @@ export default async function PermitPage({ params }: { params: Promise<{ id: str
           {p.description && <p className="mt-3 text-slate-700">{p.description}</p>}
         </header>
         <dl className="divide-y divide-slate-100">
-          {rows.filter(([, v]) => v != null && v !== "" && v !== "—").map(([k, v]) => (
+          {rows.filter(([k, v]) => k.startsWith("Permit ") || (v != null && v !== "" && v !== "—")).map(([k, v]) => (
             <div key={k} className="grid grid-cols-3 gap-4 px-5 py-2.5 text-sm">
               <dt className="text-slate-500">{k}</dt><dd className="col-span-2 text-slate-900">{v}</dd>
             </div>

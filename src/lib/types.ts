@@ -36,6 +36,8 @@ export interface Permit {
   sourceUrl?: string | null;
   /** Other sources that also returned this permit (after merge). */
   alsoIn?: string[];
+  /** Which source supplied dateCompleted after a merge. */
+  finalFrom?: string;
 }
 
 export interface SearchQuery {
