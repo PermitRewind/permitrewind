@@ -56,7 +56,9 @@ PermitStack does not offer an autocomplete endpoint. `GET /api/address-suggest?q
 }
 ```
 
-`status` is `ok`, `empty`, `throttled`, or `unavailable`. `zip` and `city` are `null` when Nominatim does not have them. Choosing a suggestion fills `label` and runs the search. OSM coverage misses some new streets, so a typed address still searches.
+`status` is `ok`, `empty`, `throttled`, or `unavailable`. `zip` and `city` are `null` when Nominatim does not have them. Choosing a suggestion fills `label` and enables Search. Typing a matching address without choosing it does not. OSM coverage misses some new streets, so a typed address still searches.
+
+Address search runs only after a suggestion is chosen. The Search button stays off until then, and editing the text clears the choice. Each suggestion includes an opaque `token`. `GET /api/search` and the results page require that token in `sel` and check that the address has a street number and street name before calling PermitStack. A pasted or bookmarked address without `sel` is not searched; the page asks the visitor to check the spelling or try a nearby cross street and pick from the list. Parcel and permit search do not use `sel`.
 
 Typed addresses are parsed before the PermitStack call. A normal suffix such as Dr is sent as typed, so `19156 Dove Creek Dr` is the same PermitStack query as before normalization and still returns all three Tampa rows (including roofing permit BTR-23-0567345). `3533 Sam Allen Oaks Cir Plant City` is the exception: Cir, Circle, and CR are widened to street `3533 Sam Allen Oaks` and city `Plant City`, then rows outside that suffix family (such as Blvd) are dropped. That keeps historical `SFR40294` with the modern Cir/Circle rows.
 

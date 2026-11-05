@@ -4,6 +4,7 @@ import SearchForm from "@/components/SearchForm";
 import ResultsActions from "@/components/ResultsActions";
 import { getProvider } from "@/lib/providers";
 import { CITY_SUGGESTIONS, COVERAGE_NOTE, DEFAULT_REGION, PERMIT_CATEGORIES, PERMIT_STATUSES } from "@/lib/jurisdictions";
+import { ADDRESS_SELECTION_MESSAGE, evaluateAddressSubmission } from "@/lib/address-selection";
 import { Permit, ProviderError, SearchMode, SearchQuery, SearchResult } from "@/lib/types";
 import { bestDate, finalDate, fmtDate, fmtLabel, sourceAttribution, statusColor } from "@/lib/format";
 import { permitLinkTarget } from "@/lib/permit-link";
@@ -30,7 +31,11 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
   let result: SearchResult | null = null;
   let error: string | null = null;
   let otherCount = 0;
-  if (query.q.trim().length >= 2) {
+  const addressGate = mode === "address" && query.q.trim().length >= 2
+    ? evaluateAddressSubmission(query.q, one(sp.sel))
+    : null;
+  const addressBlocked = addressGate !== null && !addressGate.ok;
+  if (query.q.trim().length >= 2 && !addressBlocked) {
     try {
       result = await getProvider().search(query);
     } catch (e) {
@@ -51,10 +56,17 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
   return (
     <div className="mx-auto max-w-6xl px-4 py-6">
       <div className="rounded-xl bg-white border border-slate-200 p-4 shadow-sm no-print">
-        <SearchForm initialMode={mode} initialQ={query.q} compact />
+        <SearchForm
+          initialMode={mode}
+          initialQ={query.q}
+          compact
+          suggestOnMount={addressBlocked && query.q.trim().length >= 4}
+          initialSelection={addressGate?.ok ? { label: query.q.trim(), token: one(sp.sel) } : null}
+        />
         <form method="get" className="mt-4 grid grid-cols-2 md:grid-cols-7 gap-2 items-end text-sm">
           <input type="hidden" name="mode" value={mode} />
           <input type="hidden" name="q" value={query.q} />
+          {addressGate?.ok ? <input type="hidden" name="sel" value={one(sp.sel)} /> : null}
           <label className="flex flex-col gap-1">City
             <input name="city" list="fl-cities" defaultValue={query.city} placeholder="All of Florida" className={sel} autoComplete="off" maxLength={60} />
             <datalist id="fl-cities">
@@ -81,7 +93,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
             <input type="date" name="to" defaultValue={query.dateTo} className={sel} /></label>
           <div className="flex gap-2">
             <button className="flex-1 rounded-md bg-brand-600 hover:bg-brand-700 text-white px-3 py-1.5 font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600">Apply</button>
-            <Link href={`/search?mode=${mode}&q=${encodeURIComponent(query.q)}`} className="rounded-md px-2 py-1.5 text-slate-600 hover:bg-slate-100">Reset</Link>
+            <Link href={`/search?mode=${mode}&q=${encodeURIComponent(query.q)}${addressGate?.ok ? `&sel=${encodeURIComponent(one(sp.sel))}` : ""}`} className="rounded-md px-2 py-1.5 text-slate-600 hover:bg-slate-100">Reset</Link>
           </div>
         </form>
         <p className="mt-3 text-xs text-slate-500">{COVERAGE_NOTE}</p>
@@ -94,6 +106,8 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
 
       {!query.q.trim() ? (
         <State title="Start a search" body="Enter a street address, parcel ID, or permit number above." />
+      ) : addressBlocked ? (
+        <State title="Choose an address from the list" body={ADDRESS_SELECTION_MESSAGE} />
       ) : query.q.trim().length < 2 ? (
         <State title="Search too short" body="Please enter at least 2 characters." />
       ) : error ? (

@@ -1,3 +1,15 @@
+/** Search stays disabled in address mode until this exact text was picked from the list. */
+export function isAddressSearchEnabled(input: {
+  mode: "address" | "parcel" | "permit";
+  text: string;
+  selected: { label: string; token: string } | null;
+}): boolean {
+  const text = input.text.trim();
+  if (!text) return false;
+  if (input.mode !== "address") return true;
+  return !!input.selected?.token && input.selected.label === text;
+}
+
 export interface ComboState {
   open: boolean;
   active: number;

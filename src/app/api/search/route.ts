@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { evaluateAddressSubmission } from "@/lib/address-selection";
 import { getProvider } from "@/lib/providers";
 import { ProviderError, SearchMode } from "@/lib/types";
 
@@ -8,6 +9,10 @@ export async function GET(req: NextRequest) {
   const q = (s.get("q") ?? "").trim();
   if (q.length < 2) return NextResponse.json({ error: "q must be at least 2 characters" }, { status: 400 });
   const mode = (["address", "parcel", "permit"].includes(s.get("mode") ?? "") ? s.get("mode") : "address") as SearchMode;
+  if (mode === "address") {
+    const gate = evaluateAddressSubmission(q, s.get("sel"));
+    if (!gate.ok) return NextResponse.json({ error: gate.message }, { status: 422 });
+  }
   try {
     const result = await getProvider().search({
       mode, q,
