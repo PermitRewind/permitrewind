@@ -1,12 +1,13 @@
 @import "tailwindcss";
 
 @theme {
-  --color-navy-50: #f1f5fb;
-  --color-navy-100: #dde6f3;
-  --color-navy-600: #2c4a78;
-  --color-navy-700: #213a61;
-  --color-navy-800: #172a48;
-  --color-navy-900: #0f1d33;
+  /* Georgia Bulldogs red, with black and gray for the rest of the UI. */
+  --color-brand-50: #fdf2f4;
+  --color-brand-100: #f8d5dc;
+  --color-brand-600: #ba0c2f;
+  --color-brand-700: #9b0a27;
+  --color-brand-800: #111111;
+  --color-brand-900: #0a0a0a;
 }
 
 body { @apply bg-slate-50 text-slate-800 antialiased; }

@@ -18,9 +18,9 @@ export default async function PermitPage({ params }: { params: Promise<{ id: str
   if (error) {
     return (
       <div className="mx-auto max-w-xl px-4 py-16 text-center" role="alert">
-        <h1 className="text-xl font-semibold text-navy-900">We couldn&apos;t load that permit</h1>
+        <h1 className="text-xl font-semibold text-neutral-950">We couldn&apos;t load that permit</h1>
         <p className="mt-2 text-slate-600">{error}</p>
-        <Link href="/" className="mt-4 inline-block text-navy-600 underline">Back to search</Link>
+        <Link href="/" className="mt-4 inline-block text-brand-600 underline">Back to search</Link>
       </div>
     );
   }
@@ -54,13 +54,13 @@ export default async function PermitPage({ params }: { params: Promise<{ id: str
   return (
     <div className="mx-auto max-w-3xl px-4 py-6">
       <div className="no-print flex justify-between mb-4 text-sm">
-        <Link href={p.address ? `/search?mode=address&q=${encodeURIComponent(p.address)}` : "/"} className="text-navy-600 hover:underline">← All permits at this address</Link>
+        <Link href={p.address ? `/search?mode=address&q=${encodeURIComponent(p.address)}` : "/"} className="text-brand-600 hover:underline">← All permits at this address</Link>
         <PrintButton />
       </div>
       <article className="rounded-xl border border-slate-200 bg-white shadow-sm">
         <header className="border-b border-slate-200 p-5">
           <p className="text-sm text-slate-500">{fmtDate(bestDate(p))} · {p.jurisdiction}</p>
-          <h1 className="mt-1 text-2xl font-bold text-navy-900">Permit {p.permitNumber}</h1>
+          <h1 className="mt-1 text-2xl font-bold text-neutral-950">Permit {p.permitNumber}</h1>
           <span className={`mt-2 inline-block rounded-full px-2 py-0.5 text-xs font-medium ${statusColor(p.status)}`}>{fmtLabel(p.status)}</span>
           {p.description && <p className="mt-3 text-slate-700">{p.description}</p>}
         </header>

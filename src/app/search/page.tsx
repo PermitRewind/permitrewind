@@ -80,7 +80,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
           <label className="flex flex-col gap-1">Issue date to
             <input type="date" name="to" defaultValue={query.dateTo} className={sel} /></label>
           <div className="flex gap-2">
-            <button className="flex-1 rounded-md bg-navy-700 hover:bg-navy-800 text-white px-3 py-1.5 font-medium">Apply</button>
+            <button className="flex-1 rounded-md bg-brand-600 hover:bg-brand-700 text-white px-3 py-1.5 font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600">Apply</button>
             <Link href={`/search?mode=${mode}&q=${encodeURIComponent(query.q)}`} className="rounded-md px-2 py-1.5 text-slate-600 hover:bg-slate-100">Reset</Link>
           </div>
         </form>
@@ -101,8 +101,8 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
       ) : result && (
         <section className="mt-6">
           <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-            <h1 className="text-lg font-semibold text-navy-900">
-              {result.permits.length} permit{result.permits.length === 1 ? "" : "s"} for <span className="text-navy-600">&ldquo;{query.q}&rdquo;</span>
+            <h1 className="text-lg font-semibold text-neutral-950">
+              {result.permits.length} permit{result.permits.length === 1 ? "" : "s"} for <span className="text-brand-600">&ldquo;{query.q}&rdquo;</span>
               {result.total != null && result.total > result.permits.length && <span className="text-sm font-normal text-slate-500"> (showing first {result.permits.length} of {result.total})</span>}
             </h1>
             <ResultsActions permits={result.permits} filename={`permits-${query.q.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.csv`} />
@@ -124,10 +124,10 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {result.permits.map((p) => (
-                      <tr key={p.id} className="hover:bg-navy-50 align-top">
+                      <tr key={p.id} className="hover:bg-brand-50 align-top">
                         <td className="px-3 py-2 whitespace-nowrap">{fmtDate(bestDate(p))}</td>
                         <td className="px-3 py-2 whitespace-nowrap">{fmtDate(finalDate(p))}</td>
-                        <td className="px-3 py-2 whitespace-nowrap"><PermitLink p={p} className="text-navy-600 font-medium hover:underline" /></td>
+                        <td className="px-3 py-2 whitespace-nowrap"><PermitLink p={p} className="text-brand-600 font-medium hover:underline" /></td>
                         <td className="px-3 py-2">{p.recordKind === "other" ? <span className="rounded bg-slate-200 px-1.5 py-0.5 text-xs font-medium text-slate-700">Other record</span> : null} {fmtLabel(p.category)}{p.contractorName ? <div className="text-xs text-slate-500">{p.contractorName}{p.estimatedValue != null ? ` · $${p.estimatedValue.toLocaleString("en-US")}` : ""}</div> : null}</td>
                         <td className="px-3 py-2"><span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusColor(p.status)}`}>{fmtLabel(p.status)}</span></td>
                         <td className="px-3 py-2 max-w-md">{p.description ?? "—"}</td>
@@ -143,7 +143,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
                   <li key={p.id}>
                     <div className="block rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
                       <div className="flex justify-between text-sm">
-                        <PermitLink p={p} className="font-semibold text-navy-700 underline" />
+                        <PermitLink p={p} className="font-semibold text-brand-700 underline" />
                         <span className="text-right text-xs text-slate-500">Issued {fmtDate(bestDate(p))}<br />Final {fmtDate(finalDate(p))}</span>
                       </div>
                       <div className="mt-1 flex gap-2 items-center text-xs">
