@@ -1,5 +1,6 @@
 import "server-only";
 import type { PermitProvider } from "./types";
+import { parseAddressQuery, permitAddressMatches, toPermitStackAddress } from "../address";
 import { getRegion, permitInCoverage } from "../jurisdictions";
 import { isPermitStackId } from "../permit-link";
 import { Permit, ProviderError, SearchQuery, SearchResult } from "../types";
@@ -76,6 +77,7 @@ export class PermitStackProvider implements PermitProvider {
   async search(query: SearchQuery): Promise<SearchResult> {
     const region = getRegion(query.regionId);
     const q = query.q.trim();
+    const parsed = query.mode === "address" ? parseAddressQuery(q) : null;
     const params: Record<string, string | undefined> = {
       state: region.state,
       city: query.city?.trim() || undefined,
@@ -86,14 +88,19 @@ export class PermitStackProvider implements PermitProvider {
       page: String(query.page ?? 1),
       per_page: String(PER_PAGE),
     };
-    if (query.mode === "address") params.address = q;
-    else if (query.mode === "parcel") params.parcel = q;
+    if (query.mode === "address" && parsed) {
+      const built = toPermitStackAddress(parsed);
+      params.address = built.address;
+      if (!params.city && built.city) params.city = built.city;
+      if (built.zip) params.zip_code = built.zip;
+    } else if (query.mode === "parcel") params.parcel = q;
     else params.permit_number = q;
 
     const body = await this.request("/v1/permits/search", params);
     const all: Permit[] = (body.results ?? []).map(mapPermit);
     // Default region is statewide Florida. Do not drop Tampa or other non-Polk rows.
-    const permits = all.filter((p) => permitInCoverage(region, p));
+    const covered = all.filter((p) => permitInCoverage(region, p));
+    const permits = parsed?.streetName ? covered.filter((p) => permitAddressMatches(parsed, p)) : covered;
 
     const notices: string[] = [];
     if (body.tier_window_days) {
@@ -101,12 +108,12 @@ export class PermitStackProvider implements PermitProvider {
         `Current data plan covers permits from ${body.tier_window_from} onward (last ${body.tier_window_days} days). Older history requires a paid PermitStack plan.`
       );
     }
-    if (all.length !== permits.length) {
-      notices.push(`${all.length - permits.length} matching permit(s) outside ${region.label} were hidden.`);
+    if (all.length !== covered.length) {
+      notices.push(`${all.length - covered.length} matching permit(s) outside ${region.label} were hidden.`);
     }
     return {
       permits,
-      total: all.length === permits.length ? body.total ?? null : permits.length,
+      total: permits.length === all.length ? body.total ?? null : permits.length,
       page: body.page ?? 1,
       perPage: body.per_page ?? PER_PAGE,
       notices,
