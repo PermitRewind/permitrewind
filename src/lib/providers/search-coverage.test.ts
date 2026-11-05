@@ -88,7 +88,7 @@ test("19156 Dove Creek Dr keeps three Tampa permits", async () => {
   try {
     const result = await new PermitStackProvider("test-key").search({ mode: "address", q: "19156 Dove Creek Dr" });
     assert.equal(result.permits.length, 3);
-    assert.deepEqual(result.permits.map((p) => p.permitNumber), ["HC-ROOF-1", "HC-POOL-2", "HC-ELEC-3"]);
+    assert.deepEqual(result.permits.map((p) => p.permitNumber).sort(), ["HC-ELEC-3", "HC-POOL-2", "HC-ROOF-1"]);
     assert.ok(result.permits.every((p) => p.city === "TAMPA" && p.state === "FL" && p.jurisdiction === "Hillsborough County"));
     assert.ok(result.permits.every((p) => sourceAttribution(p) === "PermitStack · statewide Florida"));
     assert.equal(result.notices.some((n) => /hidden/i.test(n)), false);
@@ -97,6 +97,22 @@ test("19156 Dove Creek Dr keeps three Tampa permits", async () => {
     assert.equal(seen?.searchParams.get("city"), null);
     assert.equal(seen?.searchParams.get("jurisdiction"), null);
     assert.equal(seen?.pathname, "/v1/permits/search");
+  } finally {
+    restore();
+  }
+});
+
+test("605 South Central Avenue Bartow excludes a Winter Haven permit and lists Bartow first", async () => {
+  const rows = [
+    stackRow({ id: "cccccccc-cccc-4ccc-8ccc-ccccccccccc1", permit_number: "WH-1", address_street: "605 SOUTH CENTRAL AVENUE", address_city: "WINTER HAVEN", jurisdiction_name: "City of Winter Haven", date_issued: "2024-01-01" }),
+    stackRow({ id: "cccccccc-cccc-4ccc-8ccc-ccccccccccc2", permit_number: "BT-1", address_street: "605 S CENTRAL AVE", address_city: "BARTOW", jurisdiction_name: "City of Bartow", date_issued: "2011-01-01" }),
+  ];
+  const restore = mockFetch(() => ({ body: { results: rows, total: 2, page: 1, per_page: 100 } }));
+  try {
+    const strict = await new PermitStackProvider("test-key").search({ mode: "address", q: "605 South Central Avenue", city: "Bartow" });
+    assert.deepEqual(strict.permits.map((p) => p.permitNumber), ["BT-1"]);
+    const broad = await new PermitStackProvider("test-key").search({ mode: "address", q: "605 South Central Avenue", city: "Bartow", broaden: true });
+    assert.deepEqual(broad.permits.map((p) => p.permitNumber), ["BT-1", "WH-1"]);
   } finally {
     restore();
   }

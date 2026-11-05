@@ -1,5 +1,6 @@
 import "server-only";
 import type { PermitProvider } from "./types";
+import { cityPreference } from "../address";
 import { Permit, SearchQuery, SearchResult } from "../types";
 
 const norm = (n?: string | null) => (n ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
@@ -88,7 +89,11 @@ export class CompositeProvider implements PermitProvider {
       if (rest.every((r) => r.status === "rejected")) throw main.reason;
       notices.unshift(`${this.primary.name} is unavailable right now (${main.reason?.message ?? "error"}).`);
     }
-    merged.sort((a, b) => ((b.dateIssued ?? b.dateFiled ?? "") > (a.dateIssued ?? a.dateFiled ?? "") ? 1 : -1));
+    merged.sort((a, b) => {
+      const byCity = cityPreference(query.city, a) - cityPreference(query.city, b);
+      if (byCity) return byCity;
+      return (b.dateIssued ?? b.dateFiled ?? "") > (a.dateIssued ?? a.dateFiled ?? "") ? 1 : -1;
+    });
     return { permits: merged, total: Math.max(total ?? 0, merged.length), page: 1, perPage: merged.length, notices };
   }
 

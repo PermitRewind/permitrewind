@@ -1,5 +1,5 @@
 import { signAddressSelection } from "./address-selection";
-import { parseAddressQuery } from "./address";
+import { parseAddressQuery, splitStreetUnit } from "./address";
 import { trailingKnownCity } from "./jurisdictions";
 
 /**
@@ -20,6 +20,9 @@ export interface AddressSuggestion {
   city: string | null;
   state: "FL";
   zip: string | null;
+  unitType: string | null;
+  unitNumber: string | null;
+  county: string | null;
   /** Opaque proof that this row was chosen from a server suggestion. */
   token: string;
 }
@@ -55,6 +58,8 @@ interface NominatimAddress {
   village?: string;
   hamlet?: string;
   municipality?: string;
+  county?: string;
+  unit?: string;
   state?: string;
   postcode?: string;
   country_code?: string;
@@ -77,17 +82,27 @@ function isFlorida(address: NominatimAddress | undefined): boolean {
 export function suggestionFromNominatim(hit: NominatimHit, typedQuery = ""): AddressSuggestion | null {
   const address = hit.address;
   if (!isFlorida(address) || !address?.road) return null;
-  const street = [address.house_number, address.road].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+  const combined = [address.house_number, address.road, address.unit].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+  const split = splitStreetUnit(combined);
+  const street = split.street;
   if (!street) return null;
-  // Some Florida house points list only the county. Keep a city the user already typed.
-  const city = address.city || address.town || address.village || address.hamlet || address.municipality || trailingKnownCity(typedQuery);
+  const nominatimCity = address.city || address.town || address.village || address.hamlet || address.municipality || null;
+  const typedCity = trailingKnownCity(typedQuery);
+  // A city the visitor typed wins when Nominatim names a different place (Highland City vs Lakeland, Winter Haven vs Bartow).
+  const city = typedCity && nominatimCity && typedCity.toLowerCase() !== nominatimCity.toLowerCase()
+    ? typedCity
+    : nominatimCity || typedCity;
   const zip = address.postcode?.match(/\d{5}/)?.[0] ?? null;
+  const county = address.county?.replace(/\s+county$/i, "") || null;
   const stateZip = ["FL", zip].filter(Boolean).join(" ");
   const label = [street, city, stateZip].filter(Boolean).join(", ");
   const parsed = parseAddressQuery(street);
   if (!parsed.number || !parsed.streetName) return null;
-  const token = signAddressSelection({ label, street, city, state: "FL", zip });
-  return { label, street, city, state: "FL", zip, token };
+  const token = signAddressSelection({
+    label, street, city, state: "FL", zip, county,
+    unitType: split.unitType, unitNumber: split.unitNumber,
+  });
+  return { label, street, city, state: "FL", zip, county, unitType: split.unitType, unitNumber: split.unitNumber, token };
 }
 
 function remember(cache: Map<string, AddressSuggestResponse>, key: string, value: AddressSuggestResponse) {

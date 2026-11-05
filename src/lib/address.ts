@@ -1,4 +1,4 @@
-import { trailingKnownCity } from "./jurisdictions";
+import { CITY_SUGGESTIONS, trailingKnownCity } from "./jurisdictions";
 
 /**
  * Street-suffix families. PermitStack stores the same road as Cir, Circle, or CR,
@@ -154,7 +154,7 @@ export function toPermitStackAddress(parsed: ParsedAddress): { address: string; 
  */
 export function permitAddressMatches(
   parsed: ParsedAddress,
-  permit: { address?: string | null; city?: string | null },
+  permit: { address?: string | null; city?: string | null; jurisdiction?: string | null },
 ): boolean {
   if (!parsed.streetName) return true;
   const line = permit.address ?? "";
@@ -162,14 +162,54 @@ export function permitAddressMatches(
   if (!rowTokens.length) return false;
   const rowNumber = /^\d+[A-Z]?$/.test(rowTokens[0]) ? rowTokens[0] : null;
   if (parsed.number && rowNumber !== parsed.number.toUpperCase()) return false;
-  const nameTokens = tokens(parsed.streetName);
-  const flat = rowTokens.join("");
+  const nameTokens = canonDirections(tokens(parsed.streetName));
+  const flat = canonDirections(rowTokens).join("");
   const nameFlat = nameTokens.join("");
-  if (!containsSequence(rowTokens, nameTokens) && !flat.includes(nameFlat)) return false;
+  if (!containsSequence(canonDirections(rowTokens), nameTokens) && !flat.includes(nameFlat)) return false;
   if (parsed.suffix) {
     const rowSuffix = suffixInLine(line);
     if (rowSuffix && !suffixEquivalents(parsed.suffix).includes(rowSuffix)) return false;
   }
-  if (parsed.city && permit.city && norm(permit.city) !== norm(parsed.city)) return false;
+  if (parsed.city && cityPreference(parsed.city, permit) >= 2) return false;
   return true;
+}
+
+const DIR_FULL: Record<string, string> = { NORTH: "N", SOUTH: "S", EAST: "E", WEST: "W" };
+
+function canonDirections(parts: string[]): string[] {
+  return parts.map((part) => DIR_FULL[part] ?? part);
+}
+
+const KNOWN_CITY_NORMS = [...CITY_SUGGESTIONS]
+  .map((city) => norm(city))
+  .sort((a, b) => b.length - a.length);
+
+function knownCityIn(text: string): string | null {
+  const n = norm(text).replace(/^CITY OF /, "");
+  return KNOWN_CITY_NORMS.find((city) => n === city) ?? null;
+}
+
+/**
+ * 0 = this city (or its "City of" jurisdiction), 1 = no city named, 2 = a different known city.
+ * City is the primary rank, ahead of permit date.
+ */
+export function cityPreference(
+  wanted: string | null | undefined,
+  permit: { city?: string | null; jurisdiction?: string | null },
+): number {
+  if (!wanted?.trim()) return 0;
+  const target = norm(wanted);
+  const named = [permit.city, permit.jurisdiction].map((value) => (value ? knownCityIn(value) : null)).filter((value): value is string => !!value);
+  if (named.some((city) => city === target)) return 0;
+  if (!named.length) return 1;
+  return 2;
+}
+
+const UNIT_LABEL: Record<string, string> = { APT: "Apt", APARTMENT: "Apt", UNIT: "Unit", STE: "Suite", SUITE: "Suite" };
+
+/** Pull a trailing Apt/Unit/Suite off a street line. The street sent to PermitStack stays without it. */
+export function splitStreetUnit(line: string): { street: string; unitType: string | null; unitNumber: string | null } {
+  const match = line.trim().match(/^(.*?)(?:\s+)(APT|APARTMENT|UNIT|STE|SUITE)\.?\s+([A-Z0-9-]+)\s*$/i);
+  if (!match) return { street: line.trim(), unitType: null, unitNumber: null };
+  return { street: match[1].trim(), unitType: UNIT_LABEL[match[2].toUpperCase()] ?? "Unit", unitNumber: match[3] };
 }

@@ -83,6 +83,19 @@ const MAJOR_FLORIDA_CITIES = [
 /** Suggestions for the city filter. Any other Florida city can still be typed. */
 export const CITY_SUGGESTIONS: string[] = [...new Set([...regionCities(POLK_REGION), ...MAJOR_FLORIDA_CITIES])].sort((a, b) => a.localeCompare(b));
 
+/** Florida counties. The address form defaults to Polk and the visitor can change it. */
+export const FLORIDA_COUNTIES = [
+  "Alachua", "Baker", "Bay", "Bradford", "Brevard", "Broward", "Calhoun", "Charlotte", "Citrus", "Clay",
+  "Collier", "Columbia", "DeSoto", "Dixie", "Duval", "Escambia", "Flagler", "Franklin", "Gadsden", "Gilchrist",
+  "Glades", "Gulf", "Hamilton", "Hardee", "Hendry", "Hernando", "Highlands", "Hillsborough", "Holmes", "Indian River",
+  "Jackson", "Jefferson", "Lafayette", "Lake", "Lee", "Leon", "Levy", "Liberty", "Madison", "Manatee",
+  "Marion", "Martin", "Miami-Dade", "Monroe", "Nassau", "Okaloosa", "Okeechobee", "Orange", "Osceola", "Palm Beach",
+  "Pasco", "Pinellas", "Polk", "Putnam", "St. Johns", "St. Lucie", "Santa Rosa", "Sarasota", "Seminole", "Sumter",
+  "Suwannee", "Taylor", "Union", "Volusia", "Wakulla", "Walton", "Washington",
+];
+
+export const DEFAULT_COUNTY = "Polk";
+
 export function getRegion(id?: string | null): Region {
   return REGIONS.find((r) => r.id === id) ?? DEFAULT_REGION;
 }

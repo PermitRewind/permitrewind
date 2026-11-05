@@ -13,6 +13,9 @@ export interface AddressSelection {
   city: string | null;
   state: "FL";
   zip: string | null;
+  unitType: string | null;
+  unitNumber: string | null;
+  county: string | null;
   exp: number;
 }
 
@@ -24,8 +27,17 @@ function signBody(body: string): string {
   return createHmac("sha256", secret()).update(body).digest("base64url");
 }
 
-export function signAddressSelection(input: Omit<AddressSelection, "exp"> & { exp?: number }, now = Date.now()): string {
-  const payload: AddressSelection = { ...input, exp: input.exp ?? now + TTL_MS };
+export function signAddressSelection(
+  input: Omit<AddressSelection, "exp" | "unitType" | "unitNumber" | "county"> & Partial<Pick<AddressSelection, "unitType" | "unitNumber" | "county" | "exp">>,
+  now = Date.now(),
+): string {
+  const payload: AddressSelection = {
+    unitType: null,
+    unitNumber: null,
+    county: "Polk",
+    ...input,
+    exp: input.exp ?? now + TTL_MS,
+  };
   const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
   return `${body}.${signBody(body)}`;
 }
@@ -58,12 +70,12 @@ export interface AddressRejection {
   message: string;
 }
 
-/** Accept only a signed suggestion whose label is exactly what was submitted, with a street number and name. */
+/** Accept only a signed suggestion for this street. City, ZIP, and county may be edited after the pick. */
 export function evaluateAddressSubmission(q: string, token: string | null | undefined, now = Date.now()): AddressSubmission | AddressRejection {
-  const label = q.trim();
-  const parsed = parseAddressQuery(label);
+  const streetText = q.trim();
+  const parsed = parseAddressQuery(streetText);
   const selection = readAddressSelection(token, now);
-  if (!selection || selection.label !== label || !parsed.number || !parsed.streetName) {
+  if (!selection || selection.street !== streetText || !parsed.number || !parsed.streetName) {
     return { ok: false, message: ADDRESS_SELECTION_MESSAGE };
   }
   const street = parseAddressQuery(selection.street);
