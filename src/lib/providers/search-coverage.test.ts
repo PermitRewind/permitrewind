@@ -93,10 +93,36 @@ test("19156 Dove Creek Dr keeps three Tampa permits", async () => {
     assert.ok(result.permits.every((p) => sourceAttribution(p) === "PermitStack · statewide Florida"));
     assert.equal(result.notices.some((n) => /hidden/i.test(n)), false);
     assert.equal(seen?.searchParams.get("state"), "FL");
-    assert.equal(seen?.searchParams.get("address"), "19156 Dove Creek");
+    assert.equal(seen?.searchParams.get("address"), "19156 Dove Creek Dr");
     assert.equal(seen?.searchParams.get("city"), null);
     assert.equal(seen?.searchParams.get("jurisdiction"), null);
     assert.equal(seen?.pathname, "/v1/permits/search");
+  } finally {
+    restore();
+  }
+});
+
+test("Dove Creek search keeps all three Tampa permits, including a directional roofing row", async () => {
+  let seen: URL | undefined;
+  const rows = [
+    stackRow({ id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1", permit_number: "BTR-13-0403822", address_street: "19156 DOVE CREEK DR", address_city: "TAMPA", category: "ELECTRICAL", jurisdiction_name: "Hillsborough County", date_issued: "2013-06-01" }),
+    stackRow({ id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2", permit_number: "BTR-10-0348682", address_street: "19156 DOVE CREEK DR", address_city: "TAMPA", category: "PLUMBING", jurisdiction_name: "City of Tampa", date_issued: "2010-04-01" }),
+    stackRow({ id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb3", permit_number: "BTR-23-0567345", address_street: "19156 N DOVE CREEK DR", address_city: "TAMPA", category: "ROOFING", jurisdiction_name: "Hillsborough County", date_issued: "2023-04-10" }),
+    stackRow({ id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb4", permit_number: "BTR-CT", address_street: "19156 DOVE CREEK CT", address_city: "TAMPA", category: "OTHER", jurisdiction_name: "City of Tampa" }),
+  ];
+  const restore = mockFetch((url) => {
+    seen = url;
+    return { body: { results: rows, total: rows.length, page: 1, per_page: 100 } };
+  });
+  try {
+    const result = await new PermitStackProvider("test-key").search({ mode: "address", q: "19156 Dove Creek Dr" });
+    assert.equal(seen?.searchParams.get("address"), "19156 Dove Creek Dr");
+    assert.equal(seen?.searchParams.get("city"), null);
+    assert.deepEqual(
+      result.permits.map((p) => p.permitNumber).sort(),
+      ["BTR-10-0348682", "BTR-13-0403822", "BTR-23-0567345"],
+    );
+    assert.equal(result.permits.find((p) => p.permitNumber === "BTR-23-0567345")?.category, "ROOFING");
   } finally {
     restore();
   }
@@ -360,7 +386,8 @@ test("live PermitStack search for 19156 Dove Creek Dr returns three Tampa permit
     q: "19156 Dove Creek Dr",
   });
   const atHouse = result.permits.filter((p) => /19156/.test(p.address ?? "") && /tampa/i.test(`${p.city ?? ""} ${p.jurisdiction ?? ""}`));
-  assert.equal(atHouse.length, 3, result.permits.map((p) => `${p.permitNumber} ${p.address} ${p.city} ${p.jurisdiction}`).join(" | "));
+  const numbers = atHouse.map((p) => p.permitNumber);
+  assert.deepEqual(numbers.filter((n) => ["BTR-23-0567345", "BTR-13-0403822", "BTR-10-0348682"].includes(n ?? "")).sort(), ["BTR-10-0348682", "BTR-13-0403822", "BTR-23-0567345"], result.permits.map((p) => `${p.permitNumber} ${p.address} ${p.city} ${p.jurisdiction} ${p.category} ${p.dateIssued}`).join(" | "));
   assert.equal(result.notices.some((n) => /hidden/i.test(n)), false);
   assert.ok(atHouse.every((p) => sourceAttribution(p) === "PermitStack · statewide Florida"));
 });

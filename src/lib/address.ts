@@ -101,10 +101,46 @@ export function parseAddressQuery(raw: string): ParsedAddress {
   return { raw: trimmed, number, streetName, suffix, city, zip };
 }
 
-/** PermitStack address param: house number + street name, suffix omitted so Cir/Circle/CR all match. */
+function norm(s: string): string {
+  return s.replace(/[^A-Za-z0-9]+/g, " ").replace(/\s+/g, " ").trim().toUpperCase();
+}
+
+function tokens(s: string): string[] {
+  const n = norm(s);
+  return n ? n.split(" ") : [];
+}
+
+/** Cir/Circle/CR are stored interchangeably. Other suffixes stay as typed so the API query matches raw PermitStack. */
+function expandsSuffix(suffix: string | null): boolean {
+  if (!suffix) return false;
+  const group = suffixEquivalents(suffix);
+  return group.includes("CIR") && group.includes("CR");
+}
+
+function containsSequence(hay: string[], needle: string[]): boolean {
+  if (!needle.length || hay.length < needle.length) return false;
+  for (let i = 0; i <= hay.length - needle.length; i++) {
+    if (needle.every((t, j) => hay[i + j] === t)) return true;
+  }
+  return false;
+}
+
+/** Last recognized suffix in the line, so "DR N" and "N DOVE CREEK DR" both count as DR. */
+function suffixInLine(line: string): string | null {
+  const parts = tokens(line);
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const key = parts[i].replace(/[^A-Z]/g, "");
+    if (SUFFIX_TO_GROUP.has(key)) return key;
+  }
+  return null;
+}
+
 export function toPermitStackAddress(parsed: ParsedAddress): { address: string; city?: string; zip?: string } {
-  const street = [parsed.number, parsed.streetName].filter(Boolean).join(" ").trim();
-  const address = parsed.streetName ? street : parsed.raw.trim();
+  const address = !parsed.streetName
+    ? parsed.raw.trim()
+    : expandsSuffix(parsed.suffix)
+      ? [parsed.number, parsed.streetName].filter(Boolean).join(" ")
+      : streetRemainder(parsed.raw, parsed.city);
   return {
     address,
     ...(parsed.city ? { city: parsed.city } : {}),
@@ -112,21 +148,28 @@ export function toPermitStackAddress(parsed: ParsedAddress): { address: string; 
   };
 }
 
-function norm(s: string): string {
-  return s.replace(/[^A-Za-z0-9]+/g, " ").replace(/\s+/g, " ").trim().toUpperCase();
-}
-
-/** Keep rows for the same house and street, including Cir/Circle/CR when that family was typed. */
+/**
+ * Same house and street name. Equivalent suffixes (Dr/Drive, Cir/Circle/CR) match.
+ * A direction before or after the suffix still matches. A different suffix family does not.
+ */
 export function permitAddressMatches(
   parsed: ParsedAddress,
   permit: { address?: string | null; city?: string | null },
 ): boolean {
   if (!parsed.streetName) return true;
-  const row = parseAddressQuery(permit.address ?? "");
-  if (!row.streetName) return false;
-  if (parsed.number && row.number !== parsed.number) return false;
-  if (norm(row.streetName) !== norm(parsed.streetName)) return false;
-  if (parsed.suffix && row.suffix && !suffixEquivalents(parsed.suffix).includes(row.suffix)) return false;
+  const line = permit.address ?? "";
+  const rowTokens = tokens(line);
+  if (!rowTokens.length) return false;
+  const rowNumber = /^\d+[A-Z]?$/.test(rowTokens[0]) ? rowTokens[0] : null;
+  if (parsed.number && rowNumber !== parsed.number.toUpperCase()) return false;
+  const nameTokens = tokens(parsed.streetName);
+  const flat = rowTokens.join("");
+  const nameFlat = nameTokens.join("");
+  if (!containsSequence(rowTokens, nameTokens) && !flat.includes(nameFlat)) return false;
+  if (parsed.suffix) {
+    const rowSuffix = suffixInLine(line);
+    if (rowSuffix && !suffixEquivalents(parsed.suffix).includes(rowSuffix)) return false;
+  }
   if (parsed.city && permit.city && norm(permit.city) !== norm(parsed.city)) return false;
   return true;
 }
