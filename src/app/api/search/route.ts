@@ -16,7 +16,10 @@ export async function GET(req: NextRequest) {
   try {
     const result = await getProvider().search({
       mode, q,
-      city: s.get("city") ?? undefined, category: s.get("category") ?? undefined, status: s.get("status") ?? undefined,
+      city: s.get("city") ?? undefined, state: s.get("state") ?? undefined, zip: s.get("zip") ?? undefined,
+      county: s.get("county") ?? undefined, unitType: s.get("unitType") ?? undefined, unitNumber: s.get("unit") ?? undefined,
+      broaden: s.get("broad") === "1",
+      category: s.get("category") ?? undefined, status: s.get("status") ?? undefined,
       dateFrom: s.get("from") ?? undefined, dateTo: s.get("to") ?? undefined,
     });
     return NextResponse.json(result);

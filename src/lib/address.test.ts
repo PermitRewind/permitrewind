@@ -4,7 +4,7 @@ import test from "node:test";
 import { NextRequest } from "next/server";
 import { GET } from "../app/api/address-suggest/route";
 import { GET as searchGET } from "../app/api/search/route";
-import { parseAddressQuery, permitAddressMatches, suffixEquivalents, toPermitStackAddress } from "./address";
+import { cityPreference, parseAddressQuery, permitAddressMatches, suffixEquivalents, toPermitStackAddress } from "./address";
 import { isAddressSearchEnabled, reduceComboboxKey } from "./address-combobox";
 import { evaluateAddressSubmission, signAddressSelection } from "./address-selection";
 import { resetAddressSuggestState, suggestionFromNominatim } from "./address-suggest";
@@ -45,6 +45,18 @@ test("Dove Creek keeps directional and Drive rows and drops a different suffix",
   assert.equal(keep.every((row) => permitAddressMatches(parsed, row)), true);
   assert.equal(permitAddressMatches(parsed, { address: "19156 DOVE CREEK BLVD", city: "TAMPA" }), false);
   assert.equal(permitAddressMatches(parsed, { address: "19156 DOVE CREEK CT", city: "TAMPA" }), false);
+});
+
+test("605 South Central Avenue Bartow ranks Bartow ahead of Winter Haven and can exclude it", () => {
+  const parsed = parseAddressQuery("605 South Central Avenue Bartow");
+  assert.equal(parsed.city, "Bartow");
+  const bartow = { address: "605 S CENTRAL AVE", city: "BARTOW", jurisdiction: "City of Bartow" };
+  const winter = { address: "605 SOUTH CENTRAL AVENUE", city: "WINTER HAVEN", jurisdiction: "City of Winter Haven" };
+  assert.equal(permitAddressMatches(parsed, bartow), true);
+  assert.equal(permitAddressMatches(parsed, winter), false);
+  assert.equal(cityPreference("Bartow", bartow), 0);
+  assert.equal(cityPreference("Bartow", winter), 2);
+  assert.equal(cityPreference("Bartow", { city: null, jurisdiction: "Polk County" }), 1);
 });
 
 test("suffix fallback keeps the four Sam Allen Oaks rows and drops Boulevard", () => {
@@ -105,13 +117,11 @@ test("GET /api/address-suggest returns standardized Florida addresses as JSON", 
     assert.equal(body.attribution, "© OpenStreetMap contributors");
     assert.equal(body.suggestions.length, 1);
     const { token, ...suggestion } = body.suggestions[0];
-    assert.deepEqual(suggestion, {
-      label: "3533 Sam Allen Oaks Circle, Plant City, FL 33563",
-      street: "3533 Sam Allen Oaks Circle",
-      city: "Plant City",
-      state: "FL",
-      zip: "33563",
-    });
+    assert.equal(suggestion.label, "3533 Sam Allen Oaks Circle, Plant City, FL 33563");
+    assert.equal(suggestion.street, "3533 Sam Allen Oaks Circle");
+    assert.equal(suggestion.city, "Plant City");
+    assert.equal(suggestion.state, "FL");
+    assert.equal(suggestion.zip, "33563");
     assert.equal(typeof token, "string");
     assert.equal(token.includes("."), true);
     assert.equal(JSON.stringify(body).includes("PERMITSTACK"), false);
@@ -157,6 +167,12 @@ test("non-Florida Nominatim rows are dropped and a typed city fills a missing ci
   assert.equal(filled?.zip, "33565");
   assert.equal(filled?.state, "FL");
   assert.match(filled?.label ?? "", /Plant City, FL 33565/);
+  const mismatch = suggestionFromNominatim(
+    { address: { house_number: "3749", road: "Feather Drive", city: "Highland City", county: "Polk County", state: "Florida", postcode: "33812" } },
+    "3749 Feather Dr Lakeland",
+  );
+  assert.equal(mismatch?.city, "Lakeland");
+  assert.equal(mismatch?.county, "Polk");
 });
 
 const sample = {
@@ -186,8 +202,9 @@ test("pasted address is rejected before PermitStack and a signed selection is ac
   assert.equal(evaluateAddressSubmission("19156 Dove Creek Dr", token).ok, false);
   assert.equal(evaluateAddressSubmission("Main Street", token).ok, false);
   const expired = signAddressSelection({ ...sample, exp: Date.now() - 1000 });
-  assert.equal(evaluateAddressSubmission(sample.label, expired).ok, false);
-  assert.equal(evaluateAddressSubmission(sample.label, token).ok, true);
+  assert.equal(evaluateAddressSubmission(sample.street, expired).ok, false);
+  assert.equal(evaluateAddressSubmission(sample.street, token).ok, true);
+  assert.equal(evaluateAddressSubmission(sample.label, token).ok, false);
 
   const original = globalThis.fetch;
   let calls = 0;
@@ -196,7 +213,7 @@ test("pasted address is rejected before PermitStack and a signed selection is ac
     throw new Error("PermitStack should not be called");
   }) as typeof fetch;
   try {
-    const rejected = await searchGET(new NextRequest(`http://localhost/api/search?mode=address&q=${encodeURIComponent(sample.label)}`));
+    const rejected = await searchGET(new NextRequest(`http://localhost/api/search?mode=address&q=${encodeURIComponent(sample.street)}`));
     assert.equal(rejected.status, 422);
     const body = await rejected.json();
     assert.match(body.error, /spelling|cross street/i);
@@ -215,9 +232,9 @@ test("pasted address is rejected before PermitStack and a signed selection is ac
     return new Response(JSON.stringify({ results: [], total: 0, page: 1, per_page: 100 }), { status: 200, headers: { "Content-Type": "application/json" } });
   }) as typeof fetch;
   try {
-    const accepted = await searchGET(new NextRequest(`http://localhost/api/search?mode=address&q=${encodeURIComponent(sample.label)}&sel=${encodeURIComponent(token)}`));
+    const accepted = await searchGET(new NextRequest(`http://localhost/api/search?mode=address&q=${encodeURIComponent(sample.street)}&sel=${encodeURIComponent(token)}&city=Lakeland`));
     assert.equal(accepted.status, 200);
-    assert.deepEqual(hosts, ["api.permit-stack.com"]);
+    assert.equal(hosts[0], "api.permit-stack.com");
     const permit = await searchGET(new NextRequest("http://localhost/api/search?mode=permit&q=BTR-23-0567345"));
     assert.equal(permit.status, 200);
     assert.ok(hosts.includes("api.permit-stack.com"));

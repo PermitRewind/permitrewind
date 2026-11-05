@@ -1,6 +1,6 @@
 import "server-only";
 import type { PermitProvider } from "./types";
-import { parseAddressQuery, permitAddressMatches, toPermitStackAddress } from "../address";
+import { cityPreference, parseAddressQuery, permitAddressMatches, splitStreetUnit, toPermitStackAddress } from "../address";
 import { getRegion, permitInCoverage } from "../jurisdictions";
 import { isPermitStackId } from "../permit-link";
 import { Permit, ProviderError, SearchQuery, SearchResult } from "../types";
@@ -17,7 +17,17 @@ function mapPermit(r: any): Permit {
     category: r.category ?? null,
     tags: r.tags ?? [],
     description: r.description_raw ?? r.enrichment?.work_summary ?? null,
-    address: r.address_street ?? null,
+    ...(() => {
+      const split = splitStreetUnit(r.address_street ?? "");
+      const jurisdiction = r.jurisdiction_name ?? null;
+      const countyRaw = r.county ?? r.address_county ?? (typeof jurisdiction === "string" && /county/i.test(jurisdiction) ? jurisdiction : null);
+      return {
+        address: split.street || null,
+        unitType: r.unit_type ?? split.unitType,
+        unitNumber: r.unit_number ?? split.unitNumber,
+        county: countyRaw ? String(countyRaw).replace(/\s+county$/i, "") : null,
+      };
+    })(),
     city: r.address_city ?? null,
     state: r.address_state ?? null,
     zip: r.address_zip ?? null,
@@ -92,15 +102,22 @@ export class PermitStackProvider implements PermitProvider {
       const built = toPermitStackAddress(parsed);
       params.address = built.address;
       if (!params.city && built.city) params.city = built.city;
-      if (built.zip) params.zip_code = built.zip;
+      if (!params.state && query.state) params.state = query.state;
+      if (query.zip) params.zip_code = query.zip;
+      else if (built.zip) params.zip_code = built.zip;
     } else if (query.mode === "parcel") params.parcel = q;
     else params.permit_number = q;
+    if (query.city?.trim()) params.city = query.city.trim();
+    if (query.state?.trim()) params.state = query.state.trim();
 
     const body = await this.request("/v1/permits/search", params);
     const all: Permit[] = (body.results ?? []).map(mapPermit);
     // Default region is statewide Florida. Do not drop Tampa or other non-Polk rows.
     const covered = all.filter((p) => permitInCoverage(region, p));
-    const permits = parsed?.streetName ? covered.filter((p) => permitAddressMatches(parsed, p)) : covered;
+    const wantedCity = query.city?.trim() || parsed?.city || "";
+    let permits = parsed?.streetName ? covered.filter((p) => permitAddressMatches(parsed, p)) : covered;
+    if (wantedCity && !query.broaden) permits = permits.filter((p) => cityPreference(wantedCity, p) < 2);
+    permits.sort((a, b) => cityPreference(wantedCity, a) - cityPreference(wantedCity, b) || ((b.dateIssued ?? b.dateFiled ?? "") > (a.dateIssued ?? a.dateFiled ?? "") ? 1 : -1));
 
     const notices: string[] = [];
     if (body.tier_window_days) {

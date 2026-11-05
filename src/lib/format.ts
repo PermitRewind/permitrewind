@@ -35,7 +35,27 @@ const SOURCE_LABELS: Record<string, string> = {
   "Polk County Property Appraiser": "Polk County Property Appraiser · Polk County only",
 };
 
-/** User-facing source line. PermitStack is statewide; county portals are Polk-only. */
+/** Stacked place lines. Empty unit fields are omitted rather than shown as blanks. */
+export function permitLocationLines(p: {
+  address?: string | null;
+  unitType?: string | null;
+  unitNumber?: string | null;
+  city?: string | null;
+  state?: string | null;
+  zip?: string | null;
+  county?: string | null;
+}): string[] {
+  const lines: string[] = [];
+  if (p.address) lines.push(p.address);
+  const unit = [p.unitType, p.unitNumber].filter(Boolean).join(" ");
+  if (unit) lines.push(unit);
+  const stateZip = [p.state, p.zip].filter(Boolean).join(" ");
+  const cityLine = [p.city, stateZip].filter(Boolean).join(", ");
+  if (cityLine) lines.push(cityLine);
+  if (p.county) lines.push(p.county.toLowerCase().includes("county") ? p.county : `${p.county} County`);
+  return lines;
+}
+
 export function sourceAttribution(p: { source?: string; alsoIn?: string[] }): string {
   const label = (source?: string) => (source ? SOURCE_LABELS[source] ?? source : "");
   return [label(p.source), ...(p.alsoIn ?? []).map((s) => label(s))].filter(Boolean).join(" + ");

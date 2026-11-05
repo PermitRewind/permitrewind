@@ -8,9 +8,12 @@ export interface Permit {
   tags: string[];
   description: string | null;
   address: string | null;
+  unitType?: string | null;
+  unitNumber?: string | null;
   city: string | null;
   state: string | null;
   zip: string | null;
+  county?: string | null;
   parcelId: string | null;
   jurisdiction: string | null;
   dateFiled: string | null;
@@ -45,6 +48,13 @@ export interface SearchQuery {
   q: string;
   regionId?: string;
   city?: string;
+  state?: string;
+  zip?: string;
+  county?: string;
+  unitType?: string;
+  unitNumber?: string;
+  /** When true, keep permits from other cities after the selected city. */
+  broaden?: boolean;
   category?: string;
   status?: string;
   dateFrom?: string;
