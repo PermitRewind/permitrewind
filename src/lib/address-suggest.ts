@@ -1,5 +1,5 @@
 import { signAddressSelection } from "./address-selection";
-import { parseAddressQuery, splitStreetUnit } from "./address";
+import { parseAddressQuery, splitStreetUnit, streetLineWithoutLocality } from "./address";
 import { trailingKnownCity } from "./jurisdictions";
 
 /**
@@ -105,6 +105,42 @@ export function suggestionFromNominatim(hit: NominatimHit, typedQuery = ""): Add
   return { label, street, city, state: "FL", zip, county, unitType: split.unitType, unitNumber: split.unitNumber, token };
 }
 
+/**
+ * Nominatim misses a full "street + city" query when the house has no city tag.
+ * `3533 Sam Allen Oaks Cir Plant City` returns nothing; the same street without
+ * Plant City returns the house (county + ZIP only). The typed city is applied later.
+ */
+export function nominatimQueryPlan(raw: string): string[] {
+  const query = raw.trim().slice(0, 120);
+  const full = /\b(fl|florida)\b/i.test(query) ? query : `${query}, Florida`;
+  const parsed = parseAddressQuery(query);
+  const street = streetLineWithoutLocality(query);
+  const plan = [full];
+  if (parsed.city && street && street.toLowerCase() !== query.toLowerCase()) {
+    const streetQuery = /\b(fl|florida)\b/i.test(street) ? street : `${street}, Florida`;
+    if (streetQuery.toLowerCase() !== full.toLowerCase()) plan.push(streetQuery);
+  }
+  return plan;
+}
+
+/** Selectable row for a fully typed street and city when Nominatim has no house. */
+function suggestionFromTyped(raw: string): AddressSuggestion | null {
+  const parsed = parseAddressQuery(raw);
+  if (!parsed.number || !parsed.streetName || !parsed.city) return null;
+  const split = splitStreetUnit(streetLineWithoutLocality(raw));
+  if (!split.street) return null;
+  const zip = parsed.zip;
+  const label = [split.street, parsed.city, ["FL", zip].filter(Boolean).join(" ")].filter(Boolean).join(", ");
+  const token = signAddressSelection({
+    label, street: split.street, city: parsed.city, state: "FL", zip, county: null,
+    unitType: split.unitType, unitNumber: split.unitNumber,
+  });
+  return {
+    label, street: split.street, city: parsed.city, state: "FL", zip, county: null,
+    unitType: split.unitType, unitNumber: split.unitNumber, token,
+  };
+}
+
 function remember(cache: Map<string, AddressSuggestResponse>, key: string, value: AddressSuggestResponse) {
   if (cache.size > CACHE_LIMIT) {
     const oldest = cache.keys().next().value;
@@ -135,20 +171,19 @@ export async function suggestFloridaAddresses(
   state.lastAt = now;
 
   const fetchImpl = opts?.fetchImpl ?? fetch;
-  const url = new URL("https://nominatim.openstreetmap.org/search");
-  url.searchParams.set("format", "jsonv2");
-  url.searchParams.set("addressdetails", "1");
-  url.searchParams.set("countrycodes", "us");
-  url.searchParams.set("layer", "address");
-  url.searchParams.set("limit", "5");
-  url.searchParams.set("dedupe", "1");
-  // Florida bounding box: left, top, right, bottom.
-  url.searchParams.set("viewbox", "-87.7,31.1,-79.8,24.4");
-  url.searchParams.set("bounded", "1");
-  const q = /\b(fl|florida)\b/i.test(query) ? query : `${query}, Florida`;
-  url.searchParams.set("q", q);
 
-  try {
+  async function fetchHits(q: string): Promise<NominatimHit[] | null> {
+    const url = new URL("https://nominatim.openstreetmap.org/search");
+    url.searchParams.set("format", "jsonv2");
+    url.searchParams.set("addressdetails", "1");
+    url.searchParams.set("countrycodes", "us");
+    url.searchParams.set("layer", "address");
+    url.searchParams.set("limit", "5");
+    url.searchParams.set("dedupe", "1");
+    // Florida bounding box: left, top, right, bottom.
+    url.searchParams.set("viewbox", "-87.7,31.1,-79.8,24.4");
+    url.searchParams.set("bounded", "1");
+    url.searchParams.set("q", q);
     const res = await fetchImpl(url, {
       signal: opts?.signal,
       headers: {
@@ -156,28 +191,51 @@ export async function suggestFloridaAddresses(
         "User-Agent": "PermitRewind/1.0 (+https://permitrewind.com)",
       },
     });
-    if (!res.ok) return empty(query, "unavailable");
-    const body = (await res.json()) as NominatimHit[];
-    const seen = new Set<string>();
-    const suggestions: AddressSuggestion[] = [];
-    for (const hit of body) {
-      const suggestion = suggestionFromNominatim(hit, query);
-      if (!suggestion) continue;
-      const id = suggestion.label.toLowerCase();
-      if (seen.has(id)) continue;
-      seen.add(id);
-      suggestions.push(suggestion);
-      if (suggestions.length === 5) break;
-    }
-    const result: AddressSuggestResponse = {
-      query,
-      suggestions,
-      attribution: ADDRESS_SUGGEST_ATTRIBUTION,
-      status: suggestions.length ? "ok" : "empty",
-    };
-    remember(state.cache, key, result);
-    return result;
-  } catch {
-    return empty(query, "unavailable");
+    if (!res.ok) return null;
+    return (await res.json()) as NominatimHit[];
   }
+
+  const seen = new Set<string>();
+  const suggestions: AddressSuggestion[] = [];
+  let unavailable = false;
+  const plan = nominatimQueryPlan(query);
+  try {
+    for (let i = 0; i < plan.length; i++) {
+      if (i > 0) {
+        if (minInterval > 0) await new Promise((resolve) => setTimeout(resolve, minInterval));
+        state.lastAt = Date.now();
+      }
+      const body = await fetchHits(plan[i]);
+      if (!body) {
+        unavailable = true;
+        continue;
+      }
+      for (const hit of body) {
+        const suggestion = suggestionFromNominatim(hit, query);
+        if (!suggestion) continue;
+        const id = suggestion.label.toLowerCase();
+        if (seen.has(id)) continue;
+        seen.add(id);
+        suggestions.push(suggestion);
+      }
+      if (suggestions.length > 0) break;
+    }
+  } catch {
+    unavailable = true;
+  }
+
+  if (!suggestions.length) {
+    const typed = suggestionFromTyped(query);
+    if (typed) suggestions.push(typed);
+  }
+  if (!suggestions.length) return empty(query, unavailable ? "unavailable" : "empty");
+
+  const result: AddressSuggestResponse = {
+    query,
+    suggestions,
+    attribution: ADDRESS_SUGGEST_ATTRIBUTION,
+    status: "ok",
+  };
+  remember(state.cache, key, result);
+  return result;
 }

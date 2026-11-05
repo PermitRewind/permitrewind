@@ -135,17 +135,57 @@ function suffixInLine(line: string): string | null {
   return null;
 }
 
+function prettyToken(token: string): string {
+  const upper = token.toUpperCase();
+  if (DIR_FULL[upper]) return DIR_FULL[upper];
+  if (upper.length === 1) return upper;
+  return upper.charAt(0) + upper.slice(1).toLowerCase();
+}
+
+function shortSuffix(suffix: string | null): string | null {
+  if (!suffix) return null;
+  const group = suffixEquivalents(suffix);
+  return group[0] ? prettyToken(group[0]) : null;
+}
+
+/** Street line with a trailing city, state, and ZIP removed. */
+export function streetLineWithoutLocality(raw: string): string {
+  return streetRemainder(raw, trailingKnownCity(raw));
+}
+
+/**
+ * Address string for PermitStack's partial match.
+ * Directions and suffixes are shortened (South → S, Avenue → Ave) because stored
+ * rows are usually abbreviated. Cir/Circle/CR stays unsuffixed so all three match.
+ * ZIP is returned for display only; sending it as zip_code ANDs away rows that omit it.
+ */
 export function toPermitStackAddress(parsed: ParsedAddress): { address: string; city?: string; zip?: string } {
+  const name = parsed.streetName
+    ? tokens(parsed.streetName).map((token) => prettyToken(token)).join(" ")
+    : "";
   const address = !parsed.streetName
     ? parsed.raw.trim()
     : expandsSuffix(parsed.suffix)
-      ? [parsed.number, parsed.streetName].filter(Boolean).join(" ")
-      : streetRemainder(parsed.raw, parsed.city);
+      ? [parsed.number, name].filter(Boolean).join(" ")
+      : [parsed.number, name, shortSuffix(parsed.suffix)].filter(Boolean).join(" ");
   return {
     address,
     ...(parsed.city ? { city: parsed.city } : {}),
     ...(parsed.zip ? { zip: parsed.zip } : {}),
   };
+}
+
+/**
+ * A shorter address that is still a substring of both "S CENTRAL AVE" and
+ * "SOUTH CENTRAL AVENUE". Used only after the abbreviated query misses.
+ */
+export function loosePermitStackAddress(parsed: ParsedAddress): string | null {
+  if (!parsed.streetName) return null;
+  const parts = tokens(parsed.streetName);
+  const hadDirection = parts.some((part) => DIR_FULL[part] || ["N", "S", "E", "W"].includes(part));
+  if (!hadDirection) return null;
+  const core = parts.filter((part) => !DIR_FULL[part] && !["N", "S", "E", "W"].includes(part)).map((part) => prettyToken(part));
+  return core.length ? core.join(" ") : null;
 }
 
 /**
