@@ -30,7 +30,7 @@ export interface Permit {
   latitude: number | null;
   longitude: number | null;
   recordKind?: string | null;
-  /** Data source label, e.g. "PermitStack" or "Polk County Accela". */
+  /** Data source label, e.g. "PermitStack" or "Polk County Accela". Display copies add statewide vs Polk-only scope. */
   source?: string;
   /** Link to the record on the source's own site, when available. */
   sourceUrl?: string | null;

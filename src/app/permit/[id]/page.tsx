@@ -1,12 +1,29 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { getProvider } from "@/lib/providers";
-import { bestDate, fmtDate, fmtLabel, fmtMoney, statusColor } from "@/lib/format";
+import { Permit, ProviderError } from "@/lib/types";
+import { bestDate, fmtDate, fmtLabel, fmtMoney, sourceAttribution, statusColor } from "@/lib/format";
 import PrintButton from "@/components/PrintButton";
 
 export default async function PermitPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const p = await getProvider().getPermit(id);
+  let p: Permit | null = null;
+  let error: string | null = null;
+  try {
+    p = await getProvider().getPermit(id);
+  } catch (e) {
+    error = e instanceof ProviderError ? e.message : "Unexpected error while loading this permit.";
+    console.error("permit failed", e);
+  }
+  if (error) {
+    return (
+      <div className="mx-auto max-w-xl px-4 py-16 text-center" role="alert">
+        <h1 className="text-xl font-semibold text-navy-900">We couldn&apos;t load that permit</h1>
+        <p className="mt-2 text-slate-600">{error}</p>
+        <Link href="/" className="mt-4 inline-block text-navy-600 underline">Back to search</Link>
+      </div>
+    );
+  }
   if (!p) notFound();
 
   const rows: [string, React.ReactNode][] = [
@@ -30,7 +47,7 @@ export default async function PermitPage({ params }: { params: Promise<{ id: str
     ["Owner", p.ownerName],
     ["Square footage", p.squareFootage],
     ["Stories / units", p.stories || p.units ? `${p.stories ?? "—"} / ${p.units ?? "—"}` : null],
-    ["Source", p.source],
+    ["Source", sourceAttribution(p)],
     ["Record kind", p.recordKind ? fmtLabel(p.recordKind) : null],
   ];
 
@@ -55,7 +72,7 @@ export default async function PermitPage({ params }: { params: Promise<{ id: str
           ))}
         </dl>
       </article>
-      <p className="mt-4 text-xs text-slate-500">Data from public records aggregated by a third-party provider. Always confirm with the issuing building department.</p>
+      <p className="mt-4 text-xs text-slate-500">This record is from PermitStack&apos;s Florida dataset. Polk County searches can also include county Accela and Property Appraiser records in the results list. Always confirm with the issuing building department.</p>
     </div>
   );
 }

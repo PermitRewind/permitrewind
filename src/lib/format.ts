@@ -27,3 +27,16 @@ export function statusColor(s?: string | null) {
 export const issueDate = (p: { dateIssued: string | null; dateFiled: string | null }) => p.dateIssued ?? p.dateFiled;
 /** Permit Final Date (finaled / completed). */
 export const finalDate = (p: { dateCompleted: string | null }) => p.dateCompleted;
+
+const SOURCE_LABELS: Record<string, string> = {
+  PermitStack: "PermitStack · statewide Florida",
+  "Polk County Accela": "Polk County Accela · Polk County only",
+  "Property Appraiser": "Polk County Property Appraiser · Polk County only",
+  "Polk County Property Appraiser": "Polk County Property Appraiser · Polk County only",
+};
+
+/** User-facing source line. PermitStack is statewide; county portals are Polk-only. */
+export function sourceAttribution(p: { source?: string; alsoIn?: string[] }): string {
+  const label = (source?: string) => (source ? SOURCE_LABELS[source] ?? source : "");
+  return [label(p.source), ...(p.alsoIn ?? []).map((s) => label(s))].filter(Boolean).join(" + ");
+}

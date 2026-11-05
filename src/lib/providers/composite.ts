@@ -34,9 +34,10 @@ export class CompositeProvider implements PermitProvider {
   constructor(private primary: PermitProvider, private extras: PermitProvider[]) {}
 
   async search(query: SearchQuery): Promise<SearchResult> {
+    const extras = this.extras.filter((p) => p.appliesTo?.(query) !== false);
     const [main, ...rest] = await Promise.allSettled([
       this.primary.search(query),
-      ...this.extras.map((p) => p.search(query)),
+      ...extras.map((p) => p.search(query)),
     ]);
     const notices: string[] = [];
     const byNum = new Map<string, Permit>();
@@ -53,7 +54,7 @@ export class CompositeProvider implements PermitProvider {
         existing.contractorLicense ??= p.contractorLicense;
         existing.estimatedValue ??= p.estimatedValue;
         existing.dateIssued ??= p.dateIssued;
-        // Final date preference: county inspection (Accela) > PermitStack completed > Property Appraiser FINAL_DT.
+        // Final date preference: county inspection (Accela) > PermitStack completed > Polk Property Appraiser FINAL_DT.
         const rank = (src?: string) => (src === "Polk County Accela" ? 3 : src === "PermitStack" ? 2 : 1);
         if (p.dateCompleted && (!existing.dateCompleted || rank(p.source) > (existing.finalFrom ? rank(existing.finalFrom) : rank(existing.source)))) {
           existing.dateCompleted = p.dateCompleted;
@@ -74,7 +75,7 @@ export class CompositeProvider implements PermitProvider {
       total = main.value.total;
     }
     rest.forEach((r, i) => {
-      const name = this.extras[i].name;
+      const name = extras[i].name;
       if (r.status === "fulfilled") {
         r.value.permits.filter((p) => applyFilters(p, query)).forEach(add);
         notices.push(...r.value.notices);

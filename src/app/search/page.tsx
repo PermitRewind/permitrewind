@@ -3,9 +3,10 @@ import type { Metadata } from "next";
 import SearchForm from "@/components/SearchForm";
 import ResultsActions from "@/components/ResultsActions";
 import { getProvider } from "@/lib/providers";
-import { DEFAULT_REGION, PERMIT_CATEGORIES, PERMIT_STATUSES, regionCities } from "@/lib/jurisdictions";
+import { CITY_SUGGESTIONS, COVERAGE_NOTE, DEFAULT_REGION, PERMIT_CATEGORIES, PERMIT_STATUSES } from "@/lib/jurisdictions";
 import { Permit, ProviderError, SearchMode, SearchQuery, SearchResult } from "@/lib/types";
-import { bestDate, finalDate, fmtDate, fmtLabel, statusColor } from "@/lib/format";
+import { bestDate, finalDate, fmtDate, fmtLabel, sourceAttribution, statusColor } from "@/lib/format";
+import { permitLinkTarget } from "@/lib/permit-link";
 
 export const metadata: Metadata = { title: "Search results" };
 
@@ -19,7 +20,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
   const query: SearchQuery = {
     mode,
     q: one(sp.q).slice(0, 120),
-    city: one(sp.city),
+    city: one(sp.city).trim(),
     category: one(sp.category),
     status: one(sp.status),
     dateFrom: DATE_RE.test(one(sp.from)) ? one(sp.from) : undefined,
@@ -44,7 +45,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
     otherCount = result.permits.filter(isOther).length;
     if (!showOther) result = { ...result, permits: result.permits.filter((p) => !isOther(p)) };
   }
-  const sel = "rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm";
+  const sel = "w-full min-w-0 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm";
   const modeLabel = { address: "Address", parcel: "Parcel", permit: "Permit #" }[mode];
 
   return (
@@ -55,10 +56,10 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
           <input type="hidden" name="mode" value={mode} />
           <input type="hidden" name="q" value={query.q} />
           <label className="flex flex-col gap-1">City
-            <select name="city" defaultValue={query.city} className={sel}>
-              <option value="">All of {DEFAULT_REGION.label}</option>
-              {regionCities(DEFAULT_REGION).map((c) => <option key={c}>{c}</option>)}
-            </select></label>
+            <input name="city" list="fl-cities" defaultValue={query.city} placeholder="All of Florida" className={sel} autoComplete="off" maxLength={60} />
+            <datalist id="fl-cities">
+              {CITY_SUGGESTIONS.map((c) => <option key={c} value={c} />)}
+            </datalist></label>
           <label className="flex flex-col gap-1">Type
             <select name="category" defaultValue={query.category} className={sel}>
               <option value="">All types</option>
@@ -83,11 +84,12 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
             <Link href={`/search?mode=${mode}&q=${encodeURIComponent(query.q)}`} className="rounded-md px-2 py-1.5 text-slate-600 hover:bg-slate-100">Reset</Link>
           </div>
         </form>
+        <p className="mt-3 text-xs text-slate-500">{COVERAGE_NOTE}</p>
       </div>
 
       <div className="print-only mb-4">
         <h1 className="text-xl font-bold">PermitRewind — Permit History Report</h1>
-        <p className="text-sm">{modeLabel}: {query.q} · {DEFAULT_REGION.label} · Generated {new Date().toLocaleDateString("en-US")}</p>
+        <p className="text-sm">{modeLabel}: {query.q}{query.city ? ` · ${query.city}` : ""} · {DEFAULT_REGION.label} · Generated {new Date().toLocaleDateString("en-US")}</p>
       </div>
 
       {!query.q.trim() ? (
@@ -112,7 +114,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
             <p key={n} className="mb-3 rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-900">{n}</p>
           ))}
           {result.permits.length === 0 ? (
-            <State title="No permits found" body={`No permits matched in ${DEFAULT_REGION.label}. Try fewer words (e.g. just the house number and street name), remove filters, or search by permit number.`} />
+            <State title="No permits found" body={`No permits matched in ${DEFAULT_REGION.label}. Try fewer words (for example the house number and street name), clear the city filter, or search by permit number.`} />
           ) : (
             <>
               <div className="hidden md:block overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
@@ -130,7 +132,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
                         <td className="px-3 py-2"><span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusColor(p.status)}`}>{fmtLabel(p.status)}</span></td>
                         <td className="px-3 py-2 max-w-md">{p.description ?? "—"}</td>
                         <td className="px-3 py-2">{p.address}{p.city ? `, ${p.city}` : ""}</td>
-                        <td className="px-3 py-2 text-xs text-slate-500">{sourceLabel(p)}</td>
+                        <td className="px-3 py-2 text-xs text-slate-500">{sourceAttribution(p)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -149,7 +151,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
                         <span className={`rounded-full px-2 py-0.5 ${statusColor(p.status)}`}>{fmtLabel(p.status)}</span>
                       </div>
                       <p className="mt-2 text-sm text-slate-700 line-clamp-2">{p.description}</p>
-                      <p className="mt-1 text-xs text-slate-500">{p.address}, {p.city} · {sourceLabel(p)}</p>
+                      <p className="mt-1 text-xs text-slate-500">{p.address}{p.city ? `, ${p.city}` : ""} · {sourceAttribution(p)}</p>
                     </div>
                   </li>
                 ))}
@@ -162,15 +164,12 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
   );
 }
 
-function sourceLabel(p: Permit) {
-  return [p.source, ...(p.alsoIn ?? [])].filter(Boolean).join(" + ");
-}
-
 function PermitLink({ p, className }: { p: Permit; className: string }) {
-  if (p.id.startsWith("polk-accela:")) {
-    return p.sourceUrl ? <a className={className} href={p.sourceUrl} target="_blank" rel="noopener noreferrer">{p.permitNumber} ↗</a> : <span>{p.permitNumber}</span>;
-  }
-  return <Link className={className} href={`/permit/${p.id}`}>{p.permitNumber ?? "View"}</Link>;
+  const target = permitLinkTarget(p);
+  const label = p.permitNumber ?? "View";
+  if (target.kind === "internal") return <Link className={className} href={target.href}>{label}</Link>;
+  if (target.kind === "external") return <a className={className} href={target.href} target="_blank" rel="noopener noreferrer">{label} ↗</a>;
+  return <span>{label}</span>;
 }
 
 function State({ title, body, tone }: { title: string; body: string; tone?: "error" }) {

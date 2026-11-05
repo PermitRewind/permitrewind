@@ -4,7 +4,7 @@ import { useState } from "react";
 import type { SearchMode } from "@/lib/types";
 
 const MODES: { id: SearchMode; label: string; placeholder: string }[] = [
-  { id: "address", label: "Address", placeholder: "e.g. 3524 Longview Ln" },
+  { id: "address", label: "Address", placeholder: "e.g. 19156 Dove Creek Dr, Tampa" },
   { id: "parcel", label: "Parcel ID", placeholder: "e.g. 24-28-15-000000-012345" },
   { id: "permit", label: "Permit #", placeholder: "e.g. BT-2026-14923" },
 ];

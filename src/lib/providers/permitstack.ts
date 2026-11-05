@@ -1,6 +1,7 @@
 import "server-only";
 import type { PermitProvider } from "./types";
-import { getRegion, inRegion } from "../jurisdictions";
+import { getRegion, permitInCoverage } from "../jurisdictions";
+import { isPermitStackId } from "../permit-link";
 import { Permit, ProviderError, SearchQuery, SearchResult } from "../types";
 
 const BASE_URL = process.env.PERMITSTACK_BASE_URL || "https://api.permit-stack.com";
@@ -77,7 +78,7 @@ export class PermitStackProvider implements PermitProvider {
     const q = query.q.trim();
     const params: Record<string, string | undefined> = {
       state: region.state,
-      city: query.city || undefined,
+      city: query.city?.trim() || undefined,
       category: query.category || undefined,
       status: query.status || undefined,
       date_after: query.dateFrom || undefined,
@@ -91,7 +92,8 @@ export class PermitStackProvider implements PermitProvider {
 
     const body = await this.request("/v1/permits/search", params);
     const all: Permit[] = (body.results ?? []).map(mapPermit);
-    const permits = all.filter((p) => inRegion(region, p.jurisdiction, p.city));
+    // Default region is statewide Florida. Do not drop Tampa or other non-Polk rows.
+    const permits = all.filter((p) => permitInCoverage(region, p));
 
     const notices: string[] = [];
     if (body.tier_window_days) {
@@ -112,7 +114,7 @@ export class PermitStackProvider implements PermitProvider {
   }
 
   async getPermit(id: string): Promise<Permit | null> {
-    if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
+    if (!isPermitStackId(id)) return null;
     try {
       return mapPermit(await this.request(`/v1/permits/${id}`));
     } catch (e) {

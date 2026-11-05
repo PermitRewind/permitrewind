@@ -4,8 +4,8 @@ import "./globals.css";
 import { SITE } from "@/lib/site";
 
 export const metadata: Metadata = {
-  title: { default: `${SITE.name} | Polk County Permit History`, template: `%s | ${SITE.name}` },
-  description: "Search building permit history by address, parcel, or permit number across Polk County, Florida.",
+  title: { default: `${SITE.name} | Florida Permit History`, template: `%s | ${SITE.name}` },
+  description: "Search building permit history by address, parcel, or permit number across Florida. Polk County searches also include county records.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -27,7 +27,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <main className="flex-1">{children}</main>
         <footer className="no-print border-t border-slate-200 bg-white text-sm text-slate-500">
           <div className="mx-auto max-w-6xl px-4 py-6 flex flex-col sm:flex-row gap-2 justify-between">
-            <p>© {new Date().getFullYear()} {SITE.company}. Permit data provided by third-party public records sources; verify with the issuing jurisdiction.</p>
+            <p>© {new Date().getFullYear()} {SITE.company}. Statewide Florida permits via PermitStack. Polk County results may also include county Accela and Property Appraiser records. Verify with the issuing jurisdiction.</p>
             <p><a className="hover:text-navy-700" href={`tel:${SITE.phone}`}>{SITE.phone}</a> · <a className="hover:text-navy-700" href={`mailto:${SITE.email}`}>{SITE.email}</a></p>
           </div>
         </footer>
