@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "city": "Davenport",
+  "state": "FL",
+  "portal": "https://portal.iworq.net/DAVENPORT/permits/600",
+  "updated": "2026-11-05",
+  "permits": [
+    {
+      "internalId": "15350875",
+      "permitNumber": "210405",
+      "permitDate": "2021-04-29",
+      "dateIssued": "2021-06-25",
+      "dateCompleted": "2022-04-18",
+      "coIssued": "2022-04-26",
+      "status": "Finaled",
+      "applicantName": "D.R. HORTON",
+      "contractorName": "D R HORTON, INC.",
+      "address": "1832 BUCKEYE RD",
+      "city": "Davenport",
+      "state": "FL",
+      "zip": null,
+      "county": "Polk",
+      "lot": "245",
+      "description": "NEW SFR - 5 BED, 3 BATH - 2 STORY",
+      "estimatedValue": 402839,
+      "squareFootage": null,
+      "feeAmount": 15658.49,
+      "sourceUrl": "https://portal.iworq.net/DAVENPORT/permit/600/15350875"
+    }
+  ],
+  "addressIndex": {
+    "1832|buckeye": [
+      "15350875"
+    ]
+  }
+}

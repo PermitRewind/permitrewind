@@ -3,6 +3,7 @@ import * as cheerio from "cheerio";
 import type { PermitProvider } from "./types";
 import { parseAddress } from "./polk-accela";
 import { solveDavenportCaptcha, DAVENPORT_PORTAL_PAGE } from "./davenport-captcha";
+import { loadHarvest, lookupHarvest, toPermit } from "./davenport-harvest";
 import { localityFromQuery, trailingKnownCity } from "../jurisdictions";
 import { Permit, ProviderError, SearchQuery, SearchResult } from "../types";
 
@@ -14,10 +15,17 @@ import { Permit, ProviderError, SearchQuery, SearchResult } from "../types";
  * Detail pages (`/DAVENPORT/permit/600/{internalId}`) are public once the id
  * is known. 1832 Buckeye Road is internal id 15350875, permit 210405.
  *
- * Production search uses a cached portal session when one is still valid, and
- * otherwise DAVENPORT_CAPTCHA_API_KEY (2captcha by default, or anticaptcha).
- * The key is never hardcoded. Without a key, this source returns a notice and
- * the other providers still run.
+ * Address search reads data/davenport-harvest.json first. A saved browser
+ * capture (1832 Buckeye Rd → permit 210405) returns with captcha disabled.
+ * DAVENPORT_CAPTCHA_* is optional once that address is in the cache.
+ *
+ * Addresses missing from the cache use a cached portal session when one is
+ * still valid, and otherwise DAVENPORT_CAPTCHA_API_KEY (2captcha by default,
+ * or anticaptcha). The key is never hardcoded. Without a key, a cache miss
+ * returns a notice and the other providers still run.
+ *
+ * Refresh the cache: save search and detail HTML in a browser, then
+ * `npx tsx scripts/ingest-davenport-harvest.ts <files...>` and commit the JSON.
  */
 
 const ORIGIN = "https://portal.iworq.net";
@@ -310,7 +318,23 @@ export class DavenportIworqProvider implements PermitProvider {
     return url.toString();
   }
 
+  /** Harvested rows for this address or permit number. Empty when the cache has no match. */
+  private async fromHarvest(query: SearchQuery): Promise<Permit[]> {
+    if (query.mode === "parcel") return [];
+    try {
+      const doc = await loadHarvest();
+      return lookupHarvest(doc, query).map(toPermit);
+    } catch (err) {
+      console.error("Davenport harvest cache failed", err);
+      return [];
+    }
+  }
+
   async search(query: SearchQuery): Promise<SearchResult> {
+    const harvested = await this.fromHarvest(query);
+    if (harvested.length) {
+      return { permits: harvested, total: harvested.length, page: 1, perPage: harvested.length, notices: [] };
+    }
     const empty = (notice: string): SearchResult => ({ permits: [], total: 0, page: 1, perPage: 0, notices: [notice] });
     const cookie = this.session && this.session.until > Date.now() ? this.session.cookie : undefined;
     let res = cookie ? await this.request(this.searchUrl(query), cookie) : null;
@@ -345,6 +369,8 @@ export class DavenportIworqProvider implements PermitProvider {
   async getPermit(id: string): Promise<Permit | null> {
     const internalId = id.startsWith("davenport-iworq:") ? id.slice("davenport-iworq:".length) : "";
     if (!/^\d+$/.test(internalId)) return null;
+    const harvested = await this.fromHarvest({ mode: "permit", q: internalId });
+    if (harvested[0]) return harvested[0];
     const res = await this.request(davenportDetailUrl(internalId));
     if (res.status === 404 || /Page Can Not Be Found/i.test(res.html)) return null;
     const detail = parseDavenportDetail(res.html);
