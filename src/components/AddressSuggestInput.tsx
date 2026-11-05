@@ -9,22 +9,25 @@ export default function AddressSuggestInput({
   id,
   value,
   onChange,
-  onPick,
+  onSelect,
   placeholder,
+  suggestOnMount = false,
 }: {
   id: string;
   value: string;
   onChange: (value: string) => void;
-  /** Standardized label chosen from the list, or submitted as typed. */
-  onPick: (label: string) => void;
+  /** A dropdown row was actually chosen. Does not run the search by itself. */
+  onSelect: (suggestion: AddressSuggestion) => void;
   placeholder: string;
+  /** Deep links open suggestions so the address can be picked. */
+  suggestOnMount?: boolean;
 }) {
   const listId = useId();
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(-1);
   const [loading, setLoading] = useState(false);
   const [payload, setPayload] = useState<AddressSuggestResponse | null>(null);
-  const [edited, setEdited] = useState(false);
+  const [edited, setEdited] = useState(suggestOnMount && value.trim().length >= 4);
   const abortRef = useRef<AbortController | null>(null);
   const suggestions = payload?.suggestions ?? [];
   const showList = open && edited && value.trim().length >= 4;
@@ -62,10 +65,11 @@ export default function AddressSuggestInput({
   }, [value, edited]);
 
   function choose(suggestion: AddressSuggestion) {
+    if (!suggestion.token) return;
     setOpen(false);
     setActive(-1);
     onChange(suggestion.label);
-    onPick(suggestion.label);
+    onSelect(suggestion);
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
@@ -88,9 +92,9 @@ export default function AddressSuggestInput({
     : loading
       ? "Looking up Florida addresses"
       : payload?.status === "unavailable" || payload?.status === "throttled"
-        ? "Suggestions are busy. You can still search what you typed."
+        ? "Suggestions are busy. Check the spelling or try a nearby cross street."
         : suggestions.length === 0
-          ? "No Florida address suggestions. You can still search what you typed."
+          ? "No Florida address suggestions. Check the spelling or try a nearby cross street."
           : `${suggestions.length} address suggestions`;
 
   return (
@@ -122,7 +126,7 @@ export default function AddressSuggestInput({
         <ul id={listId} role="listbox" aria-label="Florida address suggestions" className="absolute z-30 mt-1 max-h-60 w-full overflow-y-auto rounded-lg border border-slate-200 bg-white py-1 text-left text-sm shadow-lg">
           {loading && suggestions.length === 0 && <li className="px-3 py-2 text-slate-500">Looking up Florida addresses…</li>}
           {!loading && suggestions.length === 0 && (
-            <li className="px-3 py-2 text-slate-500">{payload?.status === "unavailable" || payload?.status === "throttled" ? "Suggestions are busy right now. You can still search what you typed." : "No Florida address suggestions. You can still search what you typed."}</li>
+            <li className="px-3 py-2 text-slate-500">{payload?.status === "unavailable" || payload?.status === "throttled" ? "Suggestions are busy right now. Check the spelling or try a nearby cross street." : "No Florida address suggestions. Check the spelling or try a nearby cross street, then choose one from the list."}</li>
           )}
           {suggestions.map((s, i) => (
             <li

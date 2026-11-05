@@ -1,3 +1,5 @@
+import { signAddressSelection } from "./address-selection";
+import { parseAddressQuery } from "./address";
 import { trailingKnownCity } from "./jurisdictions";
 
 /**
@@ -18,6 +20,8 @@ export interface AddressSuggestion {
   city: string | null;
   state: "FL";
   zip: string | null;
+  /** Opaque proof that this row was chosen from a server suggestion. */
+  token: string;
 }
 
 export type AddressSuggestStatus = "ok" | "empty" | "throttled" | "unavailable";
@@ -80,7 +84,10 @@ export function suggestionFromNominatim(hit: NominatimHit, typedQuery = ""): Add
   const zip = address.postcode?.match(/\d{5}/)?.[0] ?? null;
   const stateZip = ["FL", zip].filter(Boolean).join(" ");
   const label = [street, city, stateZip].filter(Boolean).join(", ");
-  return { label, street, city, state: "FL", zip };
+  const parsed = parseAddressQuery(street);
+  if (!parsed.number || !parsed.streetName) return null;
+  const token = signAddressSelection({ label, street, city, state: "FL", zip });
+  return { label, street, city, state: "FL", zip, token };
 }
 
 function remember(cache: Map<string, AddressSuggestResponse>, key: string, value: AddressSuggestResponse) {

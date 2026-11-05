@@ -3,8 +3,10 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { NextRequest } from "next/server";
 import { GET } from "../app/api/address-suggest/route";
+import { GET as searchGET } from "../app/api/search/route";
 import { parseAddressQuery, permitAddressMatches, suffixEquivalents, toPermitStackAddress } from "./address";
-import { reduceComboboxKey } from "./address-combobox";
+import { isAddressSearchEnabled, reduceComboboxKey } from "./address-combobox";
+import { evaluateAddressSubmission, signAddressSelection } from "./address-selection";
 import { resetAddressSuggestState, suggestionFromNominatim } from "./address-suggest";
 
 test("parses 3533 Sam Allen Oaks Cir Plant City and suffix variants", () => {
@@ -102,13 +104,16 @@ test("GET /api/address-suggest returns standardized Florida addresses as JSON", 
     assert.equal(body.status, "ok");
     assert.equal(body.attribution, "© OpenStreetMap contributors");
     assert.equal(body.suggestions.length, 1);
-    assert.deepEqual(body.suggestions[0], {
+    const { token, ...suggestion } = body.suggestions[0];
+    assert.deepEqual(suggestion, {
       label: "3533 Sam Allen Oaks Circle, Plant City, FL 33563",
       street: "3533 Sam Allen Oaks Circle",
       city: "Plant City",
       state: "FL",
       zip: "33563",
     });
+    assert.equal(typeof token, "string");
+    assert.equal(token.includes("."), true);
     assert.equal(JSON.stringify(body).includes("PERMITSTACK"), false);
     const again = await GET(new NextRequest("http://localhost/api/address-suggest?q=3533%20Sam%20Allen"));
     assert.equal((await again.json()).suggestions.length, 1);
@@ -152,6 +157,73 @@ test("non-Florida Nominatim rows are dropped and a typed city fills a missing ci
   assert.equal(filled?.zip, "33565");
   assert.equal(filled?.state, "FL");
   assert.match(filled?.label ?? "", /Plant City, FL 33565/);
+});
+
+const sample = {
+  label: "3533 Sam Allen Oaks Circle, Plant City, FL 33563",
+  street: "3533 Sam Allen Oaks Circle",
+  city: "Plant City" as const,
+  state: "FL" as const,
+  zip: "33563",
+};
+
+test("Search stays disabled until a real suggestion is selected", () => {
+  const token = signAddressSelection(sample);
+  assert.equal(isAddressSearchEnabled({ mode: "address", text: sample.label, selected: null }), false);
+  assert.equal(isAddressSearchEnabled({ mode: "address", text: sample.label, selected: { label: sample.label, token: "" } }), false);
+  assert.equal(isAddressSearchEnabled({ mode: "address", text: sample.label, selected: { label: sample.label, token } }), true);
+  assert.equal(isAddressSearchEnabled({ mode: "address", text: `${sample.label} `, selected: { label: sample.label, token } }), true);
+  assert.equal(isAddressSearchEnabled({ mode: "address", text: `${sample.label} x`, selected: { label: sample.label, token } }), false);
+  assert.equal(isAddressSearchEnabled({ mode: "parcel", text: "24-28-15", selected: null }), true);
+  assert.equal(isAddressSearchEnabled({ mode: "permit", text: "BTR-23-0567345", selected: null }), true);
+});
+
+test("pasted address is rejected before PermitStack and a signed selection is accepted", { concurrency: false }, async () => {
+  process.env.ADDRESS_SELECTION_SECRET = "test-selection-secret";
+  const token = signAddressSelection(sample);
+  assert.equal(evaluateAddressSubmission(sample.label, null).ok, false);
+  assert.equal(evaluateAddressSubmission(sample.label, `${token}tampered`).ok, false);
+  assert.equal(evaluateAddressSubmission("19156 Dove Creek Dr", token).ok, false);
+  assert.equal(evaluateAddressSubmission("Main Street", token).ok, false);
+  const expired = signAddressSelection({ ...sample, exp: Date.now() - 1000 });
+  assert.equal(evaluateAddressSubmission(sample.label, expired).ok, false);
+  assert.equal(evaluateAddressSubmission(sample.label, token).ok, true);
+
+  const original = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls += 1;
+    throw new Error("PermitStack should not be called");
+  }) as typeof fetch;
+  try {
+    const rejected = await searchGET(new NextRequest(`http://localhost/api/search?mode=address&q=${encodeURIComponent(sample.label)}`));
+    assert.equal(rejected.status, 422);
+    const body = await rejected.json();
+    assert.match(body.error, /spelling|cross street/i);
+    assert.equal(calls, 0);
+  } finally {
+    globalThis.fetch = original;
+  }
+
+  process.env.PERMITSTACK_API_KEY = "test-key";
+  process.env.ADDRESS_SELECTION_SECRET = "test-selection-secret";
+  const hosts: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    calls += 1;
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url);
+    hosts.push(url.hostname);
+    return new Response(JSON.stringify({ results: [], total: 0, page: 1, per_page: 100 }), { status: 200, headers: { "Content-Type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    const accepted = await searchGET(new NextRequest(`http://localhost/api/search?mode=address&q=${encodeURIComponent(sample.label)}&sel=${encodeURIComponent(token)}`));
+    assert.equal(accepted.status, 200);
+    assert.deepEqual(hosts, ["api.permit-stack.com"]);
+    const permit = await searchGET(new NextRequest("http://localhost/api/search?mode=permit&q=BTR-23-0567345"));
+    assert.equal(permit.status, 200);
+    assert.ok(hosts.includes("api.permit-stack.com"));
+  } finally {
+    globalThis.fetch = original;
+  }
 });
 
 test("suggest route source does not read the PermitStack key", () => {
