@@ -1,6 +1,6 @@
 import "server-only";
 import type { PermitProvider } from "./types";
-import { cityPreference, parseAddressQuery, permitAddressMatches, splitStreetUnit, toPermitStackAddress } from "../address";
+import { cityPreference, loosePermitStackAddress, parseAddressQuery, permitAddressMatches, splitStreetUnit, toPermitStackAddress } from "../address";
 import { getRegion, permitInCoverage } from "../jurisdictions";
 import { isPermitStackId } from "../permit-link";
 import { Permit, ProviderError, SearchQuery, SearchResult } from "../types";
@@ -88,9 +88,9 @@ export class PermitStackProvider implements PermitProvider {
     const region = getRegion(query.regionId);
     const q = query.q.trim();
     const parsed = query.mode === "address" ? parseAddressQuery(q) : null;
-    const params: Record<string, string | undefined> = {
-      state: region.state,
-      city: query.city?.trim() || undefined,
+    const wantedCity = query.city?.trim() || parsed?.city || "";
+    const base: Record<string, string | undefined> = {
+      state: query.state?.trim() || region.state,
       category: query.category || undefined,
       status: query.status || undefined,
       date_after: query.dateFrom || undefined,
@@ -98,25 +98,39 @@ export class PermitStackProvider implements PermitProvider {
       page: String(query.page ?? 1),
       per_page: String(PER_PAGE),
     };
+    // PermitStack ANDs every param. zip_code drops rows that leave ZIP blank or
+    // disagree with Nominatim, so ZIP stays on the form and is not sent.
+    const attempts: Record<string, string | undefined>[] = [];
     if (query.mode === "address" && parsed) {
       const built = toPermitStackAddress(parsed);
-      params.address = built.address;
-      if (!params.city && built.city) params.city = built.city;
-      if (!params.state && query.state) params.state = query.state;
-      if (query.zip) params.zip_code = query.zip;
-      else if (built.zip) params.zip_code = built.zip;
-    } else if (query.mode === "parcel") params.parcel = q;
-    else params.permit_number = q;
-    if (query.city?.trim()) params.city = query.city.trim();
-    if (query.state?.trim()) params.state = query.state.trim();
+      const city = wantedCity || undefined;
+      const specific = built.address;
+      attempts.push({ ...base, address: specific, city });
+      const loose = loosePermitStackAddress(parsed);
+      if (loose && loose.toLowerCase() !== specific.toLowerCase()) attempts.push({ ...base, address: loose, city });
+      if (city) attempts.push({ ...base, address: specific });
+    } else if (query.mode === "parcel") {
+      attempts.push({ ...base, parcel: q, city: wantedCity || undefined });
+    } else {
+      attempts.push({ ...base, permit_number: q, city: wantedCity || undefined });
+    }
 
-    const body = await this.request("/v1/permits/search", params);
-    const all: Permit[] = (body.results ?? []).map(mapPermit);
-    // Default region is statewide Florida. Do not drop Tampa or other non-Polk rows.
-    const covered = all.filter((p) => permitInCoverage(region, p));
-    const wantedCity = query.city?.trim() || parsed?.city || "";
-    let permits = parsed?.streetName ? covered.filter((p) => permitAddressMatches(parsed, p)) : covered;
-    if (wantedCity && !query.broaden) permits = permits.filter((p) => cityPreference(wantedCity, p) < 2);
+    const keep = (body: { results?: unknown[] }) => {
+      const all: Permit[] = (body.results ?? []).map(mapPermit);
+      const covered = all.filter((p) => permitInCoverage(region, p));
+      let permits = parsed?.streetName ? covered.filter((p) => permitAddressMatches(parsed, p)) : covered;
+      if (wantedCity && !query.broaden) permits = permits.filter((p) => cityPreference(wantedCity, p) < 2);
+      return { all, covered, permits };
+    };
+
+    let body = await this.request("/v1/permits/search", attempts[0]);
+    let picked = keep(body);
+    for (let i = 1; i < attempts.length && picked.permits.length === 0; i++) {
+      body = await this.request("/v1/permits/search", attempts[i]);
+      const next = keep(body);
+      if (next.permits.length || next.all.length) picked = next;
+    }
+    const { all, covered, permits } = picked;
     permits.sort((a, b) => cityPreference(wantedCity, a) - cityPreference(wantedCity, b) || ((b.dateIssued ?? b.dateFiled ?? "") > (a.dateIssued ?? a.dateFiled ?? "") ? 1 : -1));
 
     const notices: string[] = [];

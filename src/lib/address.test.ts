@@ -7,7 +7,7 @@ import { GET as searchGET } from "../app/api/search/route";
 import { cityPreference, parseAddressQuery, permitAddressMatches, suffixEquivalents, toPermitStackAddress } from "./address";
 import { isAddressSearchEnabled, reduceComboboxKey } from "./address-combobox";
 import { evaluateAddressSubmission, signAddressSelection } from "./address-selection";
-import { resetAddressSuggestState, suggestionFromNominatim } from "./address-suggest";
+import { nominatimQueryPlan, resetAddressSuggestState, suggestFloridaAddresses, suggestionFromNominatim } from "./address-suggest";
 
 test("parses 3533 Sam Allen Oaks Cir Plant City and suffix variants", () => {
   for (const q of ["3533 Sam Allen Oaks Cir Plant City", "3533 Sam Allen Oaks Circle, Plant City, FL 33563", "3533 Sam Allen Oaks CR Plant City"]) {
@@ -50,6 +50,7 @@ test("Dove Creek keeps directional and Drive rows and drops a different suffix",
 test("605 South Central Avenue Bartow ranks Bartow ahead of Winter Haven and can exclude it", () => {
   const parsed = parseAddressQuery("605 South Central Avenue Bartow");
   assert.equal(parsed.city, "Bartow");
+  assert.equal(toPermitStackAddress(parseAddressQuery("605 South Central Avenue")).address, "605 S Central Ave");
   const bartow = { address: "605 S CENTRAL AVE", city: "BARTOW", jurisdiction: "City of Bartow" };
   const winter = { address: "605 SOUTH CENTRAL AVENUE", city: "WINTER HAVEN", jurisdiction: "City of Winter Haven" };
   assert.equal(permitAddressMatches(parsed, bartow), true);
@@ -173,6 +174,69 @@ test("non-Florida Nominatim rows are dropped and a typed city fills a missing ci
   );
   assert.equal(mismatch?.city, "Lakeland");
   assert.equal(mismatch?.county, "Polk");
+
+  // Live Nominatim shape for 3533 Sam Allen Oaks: road and ZIP, no city tag.
+  const plantCity = suggestionFromNominatim(
+    { address: { house_number: "3533", road: "Sam Allen Oaks Circle", county: "Hillsborough County", state: "Florida", postcode: "33565" } },
+    "3533 Sam Allen Oaks Cir Plant City",
+  );
+  assert.equal(plantCity?.street, "3533 Sam Allen Oaks Circle");
+  assert.equal(plantCity?.city, "Plant City");
+  assert.equal(plantCity?.zip, "33565");
+  assert.equal(plantCity?.county, "Hillsborough");
+  assert.match(plantCity?.label ?? "", /Plant City, FL 33565/);
+});
+
+test("full street and city still suggests when Nominatim drops the city-qualified query", { concurrency: false }, async () => {
+  const house = {
+    address: {
+      house_number: "3533",
+      road: "Sam Allen Oaks Circle",
+      county: "Hillsborough County",
+      state: "Florida",
+      postcode: "33565",
+    },
+  };
+  assert.deepEqual(nominatimQueryPlan("3533 Sam Allen Oaks Cir Plant City"), [
+    "3533 Sam Allen Oaks Cir Plant City, Florida",
+    "3533 Sam Allen Oaks Cir, Florida",
+  ]);
+  assert.deepEqual(nominatimQueryPlan("3533 Sam Allen Oaks Circle Plant City"), [
+    "3533 Sam Allen Oaks Circle Plant City, Florida",
+    "3533 Sam Allen Oaks Circle, Florida",
+  ]);
+
+  const original = globalThis.fetch;
+  const queries: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url);
+    const q = url.searchParams.get("q") ?? "";
+    queries.push(q);
+    const body = /sam allen/i.test(q) && !/plant city/i.test(q) ? [house] : [];
+    return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    for (const typed of ["3533 Sam Allen Oaks Cir Plant City", "3533 Sam Allen Oaks Circle Plant City"]) {
+      queries.length = 0;
+      const result = await suggestFloridaAddresses(typed, { minIntervalMs: 0, state: { lastAt: 0, cache: new Map() } });
+      assert.equal(result.status, "ok");
+      assert.equal(result.suggestions.length, 1);
+      assert.equal(result.suggestions[0].street, "3533 Sam Allen Oaks Circle");
+      assert.equal(result.suggestions[0].city, "Plant City");
+      assert.equal(result.suggestions[0].zip, "33565");
+      assert.equal(result.suggestions[0].county, "Hillsborough");
+      assert.equal(queries.length, 2);
+      assert.match(queries[0], /Plant City/i);
+      assert.doesNotMatch(queries[1], /Plant City/i);
+    }
+    const missed = await suggestFloridaAddresses("9999 Nowhere Rd Bartow", { minIntervalMs: 0, state: { lastAt: 0, cache: new Map() } });
+    assert.equal(missed.status, "ok");
+    assert.equal(missed.suggestions[0].street, "9999 Nowhere Rd");
+    assert.equal(missed.suggestions[0].city, "Bartow");
+    assert.equal(typeof missed.suggestions[0].token, "string");
+  } finally {
+    globalThis.fetch = original;
+  }
 });
 
 const sample = {

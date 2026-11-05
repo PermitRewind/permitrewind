@@ -104,15 +104,51 @@ test("19156 Dove Creek Dr keeps three Tampa permits", async () => {
 
 test("605 South Central Avenue Bartow excludes a Winter Haven permit and lists Bartow first", async () => {
   const rows = [
-    stackRow({ id: "cccccccc-cccc-4ccc-8ccc-ccccccccccc1", permit_number: "WH-1", address_street: "605 SOUTH CENTRAL AVENUE", address_city: "WINTER HAVEN", jurisdiction_name: "City of Winter Haven", date_issued: "2024-01-01" }),
-    stackRow({ id: "cccccccc-cccc-4ccc-8ccc-ccccccccccc2", permit_number: "BT-1", address_street: "605 S CENTRAL AVE", address_city: "BARTOW", jurisdiction_name: "City of Bartow", date_issued: "2011-01-01" }),
+    stackRow({ id: "cccccccc-cccc-4ccc-8ccc-ccccccccccc1", permit_number: "WH-1", address_street: "605 SOUTH CENTRAL AVENUE", address_city: "WINTER HAVEN", address_zip: "33880", jurisdiction_name: "City of Winter Haven", date_issued: "2024-01-01" }),
+    stackRow({ id: "cccccccc-cccc-4ccc-8ccc-ccccccccccc2", permit_number: "BT-1", address_street: "605 S CENTRAL AVE", address_city: "BARTOW", address_zip: "33830", jurisdiction_name: "City of Bartow", date_issued: "2011-01-01" }),
   ];
-  const restore = mockFetch(() => ({ body: { results: rows, total: 2, page: 1, per_page: 100 } }));
+  const seen: URL[] = [];
+  const restore = mockFetch((url) => {
+    seen.push(url);
+    const address = url.searchParams.get("address") ?? "";
+    const zip = url.searchParams.get("zip_code");
+    // Spelled-out street plus ZIP matches nothing. Abbreviated street matches both cities.
+    if (zip || /south central avenue/i.test(address)) return { body: { results: [], total: 0, page: 1, per_page: 100 } };
+    return { body: { results: rows, total: rows.length, page: 1, per_page: 100 } };
+  });
   try {
-    const strict = await new PermitStackProvider("test-key").search({ mode: "address", q: "605 South Central Avenue", city: "Bartow" });
+    const strict = await new PermitStackProvider("test-key").search({
+      mode: "address", q: "605 South Central Avenue", city: "Bartow", state: "FL", zip: "33830", county: "Polk",
+    });
+    assert.equal(seen[0]?.searchParams.get("address"), "605 S Central Ave");
+    assert.equal(seen[0]?.searchParams.get("city"), "Bartow");
+    assert.equal(seen[0]?.searchParams.get("state"), "FL");
+    assert.equal(seen[0]?.searchParams.get("zip_code"), null);
+    assert.equal(seen[0]?.searchParams.get("county"), null);
     assert.deepEqual(strict.permits.map((p) => p.permitNumber), ["BT-1"]);
     const broad = await new PermitStackProvider("test-key").search({ mode: "address", q: "605 South Central Avenue", city: "Bartow", broaden: true });
     assert.deepEqual(broad.permits.map((p) => p.permitNumber), ["BT-1", "WH-1"]);
+  } finally {
+    restore();
+  }
+});
+
+test("selected Bartow search falls back when the abbreviated city query misses", async () => {
+  const bartow = stackRow({ id: "cccccccc-cccc-4ccc-8ccc-ccccccccccc2", permit_number: "BT-1", address_street: "605 SOUTH CENTRAL AVENUE", address_city: null, jurisdiction_name: "City of Bartow", date_issued: "2011-01-01" });
+  const winter = stackRow({ id: "cccccccc-cccc-4ccc-8ccc-ccccccccccc1", permit_number: "WH-1", address_street: "605 SOUTH CENTRAL AVENUE", address_city: "WINTER HAVEN", jurisdiction_name: "City of Winter Haven", date_issued: "2024-06-01" });
+  const seen: URL[] = [];
+  const restore = mockFetch((url) => {
+    seen.push(url);
+    const address = url.searchParams.get("address") ?? "";
+    if (address === "Central") return { body: { results: [winter, bartow], total: 2, page: 1, per_page: 100 } };
+    return { body: { results: [], total: 0, page: 1, per_page: 100 } };
+  });
+  try {
+    const result = await new PermitStackProvider("test-key").search({
+      mode: "address", q: "605 South Central Avenue", city: "Bartow", state: "FL", zip: "33830",
+    });
+    assert.deepEqual(seen.map((url) => url.searchParams.get("address")), ["605 S Central Ave", "Central"]);
+    assert.deepEqual(result.permits.map((p) => p.permitNumber), ["BT-1"]);
   } finally {
     restore();
   }
@@ -387,7 +423,16 @@ test("3533 Sam Allen Oaks Cir Plant City keeps Cir, Circle, and CR including SFR
       assert.equal(seen?.searchParams.get("address"), "3533 Sam Allen Oaks");
       assert.equal(seen?.searchParams.get("city"), "Plant City");
       assert.equal(seen?.searchParams.get("state"), "FL");
+      assert.equal(seen?.searchParams.get("zip_code"), null);
     }
+    const selected = await new PermitStackProvider("test-key").search({
+      mode: "address", q: "3533 Sam Allen Oaks Circle", city: "Plant City", state: "FL", zip: "33565", county: "Hillsborough",
+    });
+    assert.deepEqual(selected.permits.map((p) => p.permitNumber).sort(), ["PC-1", "PC-2", "PC-3", "SFR40294"]);
+    assert.equal(seen?.searchParams.get("address"), "3533 Sam Allen Oaks");
+    assert.equal(seen?.searchParams.get("city"), "Plant City");
+    assert.equal(seen?.searchParams.get("zip_code"), null);
+    assert.equal(seen?.searchParams.get("county"), null);
     await new PermitStackProvider("test-key").search({ mode: "permit", q: "SFR40294" });
     assert.equal(seen?.searchParams.get("permit_number"), "SFR40294");
     assert.equal(seen?.searchParams.get("address"), null);
