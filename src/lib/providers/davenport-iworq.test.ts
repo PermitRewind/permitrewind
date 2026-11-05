@@ -80,6 +80,8 @@ test("Davenport search runs only when the city or address says Davenport", () =>
 test("selected Davenport address search uses a captcha token, then the open detail page", async () => {
   const urls: string[] = [];
   let solves = 0;
+  // 4100 Main is not in the harvest cache, so this exercises the live captcha path.
+  const liveList = listHtml.replaceAll("1832 BUCKEYE RD", "4100 MAIN ST").replaceAll("1832 Buckeye", "4100 Main");
   const provider = new DavenportIworqProvider({
     solve: async () => {
       solves += 1;
@@ -92,16 +94,16 @@ test("selected Davenport address search uses a captcha token, then the open deta
         return new Response(detailHtml, { status: 200, headers: { "Content-Type": "text/html" } });
       }
       assert.equal(url.searchParams.get("searchField"), "text6");
-      assert.equal(url.searchParams.get("search"), "1832 Buckeye");
+      assert.equal(url.searchParams.get("search"), "4100 Main");
       if (urls.length === 1) assert.equal(url.searchParams.get("g-recaptcha-response"), "test-token");
-      return new Response(listHtml, {
+      return new Response(liveList, {
         status: 200,
         headers: { "Content-Type": "text/html", "set-cookie": "iworq_api_session=abc; Path=/; HttpOnly" },
       });
     }) as typeof fetch,
   });
 
-  const result = await provider.search({ mode: "address", q: "1832 Buckeye Road", city: "Davenport", state: "FL", zip: "33837", county: "Polk" });
+  const result = await provider.search({ mode: "address", q: "4100 Main Street", city: "Davenport", state: "FL", zip: "33837", county: "Polk" });
   assert.equal(solves, 1);
   assert.equal(result.permits.length, 1);
   const permit = result.permits[0];
@@ -122,7 +124,7 @@ test("selected Davenport address search uses a captcha token, then the open deta
   assert.equal(sourceAttribution(permit), "City of Davenport · city only");
   assert.equal(urls.some((url) => url.includes("zip")), false);
 
-  const again = await provider.search({ mode: "address", q: "1832 Buckeye Road", city: "Davenport" });
+  const again = await provider.search({ mode: "address", q: "4100 Main Street", city: "Davenport" });
   assert.equal(solves, 1);
   assert.equal(again.permits[0]?.permitNumber, "210405");
   assert.match(urls.at(-2) ?? "", /iworq/);
@@ -131,8 +133,9 @@ test("selected Davenport address search uses a captcha token, then the open deta
   assert.equal(new URL(secondSearch[1]).searchParams.get("g-recaptcha-response"), null);
 });
 
-test("a cached session that the portal rejects is solved once and still returns Buckeye", async () => {
+test("a cached session that the portal rejects is solved once and still returns the house", async () => {
   let searches = 0;
+  const liveList = listHtml.replaceAll("1832 BUCKEYE RD", "4100 MAIN ST");
   const provider = new DavenportIworqProvider({
     solve: async () => "test-token",
     fetchImpl: (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -143,16 +146,16 @@ test("a cached session that the portal rejects is solved once and still returns 
       if (cookie && !url.searchParams.get("g-recaptcha-response")) {
         return new Response("", { status: 302, headers: { location: "https://portal.iworq.net/DAVENPORT/permits/600" } });
       }
-      return new Response(listHtml, { status: 200, headers: { "set-cookie": "iworq_api_session=abc; Path=/" } });
+      return new Response(liveList, { status: 200, headers: { "set-cookie": "iworq_api_session=abc; Path=/" } });
     }) as typeof fetch,
   });
-  await provider.search({ mode: "address", q: "1832 Buckeye Road", city: "Davenport" });
-  const second = await provider.search({ mode: "address", q: "1832 Buckeye Road", city: "Davenport" });
+  await provider.search({ mode: "address", q: "4100 Main Street", city: "Davenport" });
+  const second = await provider.search({ mode: "address", q: "4100 Main Street", city: "Davenport" });
   assert.equal(second.permits[0]?.dateIssued, "2021-06-25");
   assert.ok(searches >= 3);
 });
 
-test("without a captcha solver the city search does not call the portal", async () => {
+test("without a captcha solver the harvest cache still returns Buckeye and a miss does not call the portal", async () => {
   let calls = 0;
   const provider = new DavenportIworqProvider({
     solve: async () => null,
@@ -161,37 +164,51 @@ test("without a captcha solver the city search does not call the portal", async 
       throw new Error("portal should not be called");
     }) as typeof fetch,
   });
-  const result = await provider.search({ mode: "address", q: "1832 Buckeye Road", city: "Davenport" });
+  const cached = await provider.search({ mode: "address", q: "1832 Buckeye Road", city: "Davenport" });
   assert.equal(calls, 0);
-  assert.deepEqual(result.permits, []);
-  assert.match(result.notices.join(" "), /DAVENPORT_CAPTCHA_API_KEY/);
-  assert.equal(result.notices[0], DAVENPORT_CAPTCHA_NOTICE);
+  assert.equal(cached.permits[0]?.permitNumber, "210405");
+  assert.equal(cached.permits[0]?.dateIssued, "2021-06-25");
+  assert.deepEqual(cached.notices, []);
+  const missed = await provider.search({ mode: "address", q: "4100 Main Street", city: "Davenport" });
+  assert.equal(calls, 0);
+  assert.deepEqual(missed.permits, []);
+  assert.match(missed.notices.join(" "), /DAVENPORT_CAPTCHA_API_KEY/);
+  assert.equal(missed.notices[0], DAVENPORT_CAPTCHA_NOTICE);
 });
 
 test("detail lookup by internal id does not need a captcha token", async () => {
+  const cached = await new DavenportIworqProvider({
+    fetchImpl: (async () => {
+      throw new Error("harvested id should not fetch");
+    }) as typeof fetch,
+  }).getPermit("davenport-iworq:15350875");
+  assert.equal(cached?.permitNumber, "210405");
+  assert.equal(cached?.dateIssued, "2021-06-25");
+  assert.equal(cached?.dateCompleted, "2022-04-18");
+
   const provider = new DavenportIworqProvider({
     solve: async () => {
       throw new Error("detail pages are not captcha gated");
     },
     fetchImpl: (async (input: RequestInfo | URL) => {
       const url = String(input);
-      assert.match(url, /\/DAVENPORT\/permit\/600\/15350875$/);
+      assert.match(url, /\/DAVENPORT\/permit\/600\/999001$/);
       assert.equal(url.includes("g-recaptcha-response"), false);
       return new Response(detailHtml, { status: 200 });
     }) as typeof fetch,
   });
-  const permit = await provider.getPermit("davenport-iworq:15350875");
+  const permit = await provider.getPermit("davenport-iworq:999001");
   assert.equal(permit?.permitNumber, "210405");
   assert.equal(permit?.dateIssued, "2021-06-25");
   assert.equal(permit?.dateCompleted, "2022-04-18");
 });
 
 test("another house on the same street is not kept", async () => {
-  const extra = listHtml.replace(
+  const extra = listHtml.replaceAll("1832 BUCKEYE RD", "4100 MAIN ST").replace(
     "</tbody>",
     `<tr>
       <th data-label="Permit #" data-route="https://portal.iworq.net/DAVENPORT/permit/600/99"><a href="https://portal.iworq.net/DAVENPORT/permit/600/99">999999</a></th>
-      <td data-label="Site Address">1840 BUCKEYE RD</td>
+      <td data-label="Site Address">4104 MAIN ST</td>
       <td data-label="Permit Status">Issued</td>
     </tr></tbody>`,
   );
@@ -203,7 +220,7 @@ test("another house on the same street is not kept", async () => {
       return new Response(extra, { status: 200 });
     }) as typeof fetch,
   });
-  const result = await provider.search({ mode: "address", q: "1832 Buckeye Road", city: "Davenport" });
+  const result = await provider.search({ mode: "address", q: "4100 Main Street", city: "Davenport" });
   assert.deepEqual(result.permits.map((p) => p.permitNumber), ["210405"]);
 });
 

@@ -17,7 +17,7 @@ export default function Home() {
         {[
           ["Search by address", "Type a street address to see roofing, HVAC, electrical, plumbing and other permits on file."],
           ["Filter & export", "Narrow by date, type and status, then print a clean report or download CSV."],
-          ["Florida coverage", "PermitStack covers cities and counties across Florida. Polk County — including Lakeland, Bartow, and Winter Haven — also merges county Accela and Property Appraiser records."],
+          ["Florida coverage", "PermitStack covers cities and counties across Florida. Polk County — including Lakeland, Bartow, and Winter Haven — also merges county Accela and Property Appraiser records. Davenport city permits are read from a saved iWorQ harvest."],
         ].map(([t, d]) => (
           <div key={t} className="rounded-xl bg-white p-6 shadow-sm border border-slate-200">
             <h2 className="font-semibold text-neutral-900">{t}</h2>

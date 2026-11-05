@@ -55,8 +55,8 @@ export class CompositeProvider implements PermitProvider {
         existing.contractorLicense ??= p.contractorLicense;
         existing.estimatedValue ??= p.estimatedValue;
         existing.dateIssued ??= p.dateIssued;
-        // Final date preference: county inspection (Accela) > PermitStack completed > Polk Property Appraiser FINAL_DT.
-        const rank = (src?: string) => (src === "Polk County Accela" ? 3 : src === "PermitStack" ? 2 : 1);
+        // Final date preference: City of Davenport iWorQ > county inspection (Accela) > PermitStack completed > Polk Property Appraiser FINAL_DT.
+        const rank = (src?: string) => (src === "City of Davenport" ? 4 : src === "Polk County Accela" ? 3 : src === "PermitStack" ? 2 : 1);
         if (p.dateCompleted && (!existing.dateCompleted || rank(p.source) > (existing.finalFrom ? rank(existing.finalFrom) : rank(existing.source)))) {
           existing.dateCompleted = p.dateCompleted;
           existing.finalFrom = p.source;

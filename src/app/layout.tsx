@@ -33,7 +33,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <main className="flex-1">{children}</main>
         <footer className="no-print border-t border-slate-200 bg-white text-sm text-slate-500">
           <div className="mx-auto max-w-6xl px-4 py-6 flex flex-col sm:flex-row gap-2 justify-between">
-            <p>© {new Date().getFullYear()} {SITE.company}. Statewide Florida permits via PermitStack. Polk County results may also include county Accela and Property Appraiser records. Verify with the issuing jurisdiction.</p>
+            <p>© {new Date().getFullYear()} {SITE.company}. Statewide Florida permits via PermitStack. Polk County results may also include county Accela and Property Appraiser records. Davenport results may include the city iWorQ harvest. Verify with the issuing jurisdiction.</p>
             <p><a className="hover:text-brand-700" href={`tel:${SITE.phone}`}>{SITE.phone}</a> · <a className="hover:text-brand-700" href={`mailto:${SITE.email}`}>{SITE.email}</a></p>
           </div>
         </footer>

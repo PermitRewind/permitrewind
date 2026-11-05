@@ -8,7 +8,8 @@ export default function About() {
       <p className="mt-4 text-slate-700">
         PermitRewind searches building permit history across Florida. PermitStack supplies statewide records
         for Florida cities and counties. Searches in Polk County also merge two local sources: Polk County Accela
-        (unincorporated county permits) and the Polk County Property Appraiser permit file.
+        (unincorporated county permits) and the Polk County Property Appraiser permit file. City of Davenport
+        permits come from a browser harvest of the city iWorQ portal, so a saved address still resolves when the live captcha search does not.
       </p>
       <p className="mt-4 text-slate-700">
         PermitRewind was built by {SITE.owner} of {SITE.company}, a home inspection company in {SITE.location}.
@@ -22,7 +23,7 @@ export default function About() {
           <li>Email: <a className="text-brand-600 hover:underline" href={`mailto:${SITE.email}`}>{SITE.email}</a></li>
           <li>Website: <a className="text-brand-600 hover:underline" href={SITE.website}>theagner.com</a></li>
           <li>Inspection company: {SITE.location}</li>
-          <li>Permit search coverage: Florida via PermitStack, plus Polk County Accela and Property Appraiser records</li>
+          <li>Permit search coverage: Florida via PermitStack, plus Polk County Accela and Property Appraiser records, and City of Davenport iWorQ permits from the harvest cache</li>
         </ul>
       </div>
       <p className="mt-6 text-sm text-slate-500">PermitStack is the statewide source. Polk County Accela and the Polk County Property Appraiser add county records for Polk searches. Records can be incomplete or delayed. Always verify with the issuing jurisdiction.</p>

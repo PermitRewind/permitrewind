@@ -8,7 +8,7 @@ import { DavenportIworqProvider } from "./davenport-iworq";
 
 let provider: PermitProvider | null = null;
 
-/** PermitStack (statewide Florida) is primary. Polk portals merge in for Polk searches. Set POLK_ACCELA_ENABLED=false to disable. */
+/** PermitStack (statewide Florida) is primary. Polk portals and the Davenport iWorQ harvest merge in when they apply. */
 export function getProvider(): PermitProvider {
   if (!provider) {
     const extras: PermitProvider[] = [];
