@@ -1,5 +1,6 @@
 "use client";
 import type { Permit } from "@/lib/types";
+import { sourceAttribution } from "@/lib/format";
 
 function csvCell(v: unknown) {
   const s = v == null ? "" : String(v);
@@ -13,7 +14,7 @@ export default function ResultsActions({ permits, filename }: { permits: Permit[
       ["Permit Final Date", (p) => p.dateCompleted ?? "-"], ["Date Filed", (p) => p.dateFiled], ["Category", (p) => p.category], ["Status", (p) => p.status],
       ["Description", (p) => p.description], ["Address", (p) => p.address], ["City", (p) => p.city], ["Zip", (p) => p.zip],
       ["Parcel", (p) => p.parcelId], ["Jurisdiction", (p) => p.jurisdiction], ["Contractor", (p) => p.contractorName], ["Contractor License", (p) => p.contractorLicense], ["Record Kind", (p) => (p.recordKind === "other" ? "Other record" : "Permit")],
-      ["Estimated Value", (p) => p.estimatedValue], ["Source", (p) => [p.source, ...(p.alsoIn ?? [])].filter(Boolean).join(" + ")], ["Source URL", (p) => p.sourceUrl],
+      ["Estimated Value", (p) => p.estimatedValue], ["Source", (p) => sourceAttribution(p)], ["Source URL", (p) => p.sourceUrl],
     ];
     const rows = [cols.map((c) => c[0]), ...permits.map((p) => cols.map((c) => c[1](p)))];
     const blob = new Blob([rows.map((r) => r.map(csvCell).join(",")).join("\n")], { type: "text/csv" });

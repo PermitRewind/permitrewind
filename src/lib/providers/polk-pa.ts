@@ -5,6 +5,7 @@ import { gunzipSync } from "zlib";
 import type { PermitProvider } from "./types";
 import { Permit, SearchQuery, SearchResult } from "../types";
 import { parseAddress } from "./polk-accela";
+import { shouldMergePolkSources } from "../jurisdictions";
 
 /**
  * Polk County Property Appraiser permit file (ftp_permit.zip), preprocessed by
@@ -13,7 +14,7 @@ import { parseAddress } from "./polk-accela";
  * (new homes, additions, pools, etc.), back to the 1990s. No contractor names.
  */
 const DIR = path.join(process.cwd(), "data", "pa");
-const SOURCE = "Property Appraiser";
+const SOURCE = "Polk County Property Appraiser";
 type Rec = [string, string | null, string, string | null, string | null, string | null, string | null, string | null, number | null, string, string, string, string];
 const cache = new Map<string, Rec[]>();
 
@@ -65,6 +66,10 @@ function toPermit(r: Rec): Permit {
 
 export class PolkPAProvider implements PermitProvider {
   name = SOURCE;
+
+  appliesTo(query: SearchQuery): boolean {
+    return shouldMergePolkSources(query);
+  }
 
   async search(query: SearchQuery): Promise<SearchResult> {
     const q = query.q.trim();

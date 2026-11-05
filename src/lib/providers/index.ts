@@ -7,7 +7,7 @@ import { PolkPAProvider } from "./polk-pa";
 
 let provider: PermitProvider | null = null;
 
-/** PermitStack is primary; county portals are merged in. Set POLK_ACCELA_ENABLED=false to disable. */
+/** PermitStack (statewide Florida) is primary. Polk portals merge in for Polk searches. Set POLK_ACCELA_ENABLED=false to disable. */
 export function getProvider(): PermitProvider {
   if (!provider) {
     const extras: PermitProvider[] = [];

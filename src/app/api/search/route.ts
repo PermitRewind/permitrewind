@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getProvider } from "@/lib/providers";
 import { ProviderError, SearchMode } from "@/lib/types";
 
-/** JSON search endpoint (server-side proxy; the API key never reaches the browser). */
+/** JSON search endpoint for statewide Florida. The API key stays on the server. */
 export async function GET(req: NextRequest) {
   const s = req.nextUrl.searchParams;
   const q = (s.get("q") ?? "").trim();

@@ -1,6 +1,6 @@
 export const SITE = {
   name: "PermitRewind",
-  tagline: "Fast building permit history for Polk County, FL",
+  tagline: "Fast building permit history for Florida",
   company: "Agner Building & Solutions",
   owner: "William Agner",
   location: "Bartow / Lakeland, FL",

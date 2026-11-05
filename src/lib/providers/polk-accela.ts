@@ -1,6 +1,7 @@
 import "server-only";
 import * as cheerio from "cheerio";
 import type { PermitProvider } from "./types";
+import { shouldMergePolkSources } from "../jurisdictions";
 import { Permit, ProviderError, SearchQuery, SearchResult } from "../types";
 
 /**
@@ -61,6 +62,10 @@ function formFields($: cheerio.CheerioAPI): Record<string, string> {
 export class PolkAccelaProvider implements PermitProvider {
   name = SOURCE;
   constructor(private timeoutMs = 12000) {}
+
+  appliesTo(query: SearchQuery): boolean {
+    return shouldMergePolkSources(query);
+  }
 
   private async fetchPage(cookies: string[], body?: URLSearchParams, signal?: AbortSignal) {
     const res = await fetch(SEARCH_URL, {

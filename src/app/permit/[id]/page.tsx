@@ -1,12 +1,29 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { getProvider } from "@/lib/providers";
-import { bestDate, fmtDate, fmtLabel, fmtMoney, statusColor } from "@/lib/format";
+import { Permit, ProviderError } from "@/lib/types";
+import { bestDate, fmtDate, fmtLabel, fmtMoney, sourceAttribution, statusColor } from "@/lib/format";
 import PrintButton from "@/components/PrintButton";
 
 export default async function PermitPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const p = await getProvider().getPermit(id);
+  let p: Permit | null = null;
+  let error: string | null = null;
+  try {
+    p = await getProvider().getPermit(id);
+  } catch (e) {
+    error = e instanceof ProviderError ? e.message : "Unexpected error while loading this permit.";
+    console.error("permit failed", e);
+  }
+  if (error) {
+    return (
+      <div className="mx-auto max-w-xl px-4 py-16 text-center" role="alert">
+        <h1 className="text-xl font-semibold text-neutral-950">We couldn&apos;t load that permit</h1>
+        <p className="mt-2 text-slate-600">{error}</p>
+        <Link href="/" className="mt-4 inline-block text-brand-600 underline">Back to search</Link>
+      </div>
+    );
+  }
   if (!p) notFound();
 
   const rows: [string, React.ReactNode][] = [
@@ -30,20 +47,20 @@ export default async function PermitPage({ params }: { params: Promise<{ id: str
     ["Owner", p.ownerName],
     ["Square footage", p.squareFootage],
     ["Stories / units", p.stories || p.units ? `${p.stories ?? "—"} / ${p.units ?? "—"}` : null],
-    ["Source", p.source],
+    ["Source", sourceAttribution(p)],
     ["Record kind", p.recordKind ? fmtLabel(p.recordKind) : null],
   ];
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-6">
       <div className="no-print flex justify-between mb-4 text-sm">
-        <Link href={p.address ? `/search?mode=address&q=${encodeURIComponent(p.address)}` : "/"} className="text-navy-600 hover:underline">← All permits at this address</Link>
+        <Link href={p.address ? `/search?mode=address&q=${encodeURIComponent(p.address)}` : "/"} className="text-brand-600 hover:underline">← All permits at this address</Link>
         <PrintButton />
       </div>
       <article className="rounded-xl border border-slate-200 bg-white shadow-sm">
         <header className="border-b border-slate-200 p-5">
           <p className="text-sm text-slate-500">{fmtDate(bestDate(p))} · {p.jurisdiction}</p>
-          <h1 className="mt-1 text-2xl font-bold text-navy-900">Permit {p.permitNumber}</h1>
+          <h1 className="mt-1 text-2xl font-bold text-neutral-950">Permit {p.permitNumber}</h1>
           <span className={`mt-2 inline-block rounded-full px-2 py-0.5 text-xs font-medium ${statusColor(p.status)}`}>{fmtLabel(p.status)}</span>
           {p.description && <p className="mt-3 text-slate-700">{p.description}</p>}
         </header>
@@ -55,7 +72,7 @@ export default async function PermitPage({ params }: { params: Promise<{ id: str
           ))}
         </dl>
       </article>
-      <p className="mt-4 text-xs text-slate-500">Data from public records aggregated by a third-party provider. Always confirm with the issuing building department.</p>
+      <p className="mt-4 text-xs text-slate-500">This record is from PermitStack&apos;s Florida dataset. Polk County searches can also include county Accela and Property Appraiser records in the results list. Always confirm with the issuing building department.</p>
     </div>
   );
 }
