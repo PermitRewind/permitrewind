@@ -33,6 +33,32 @@ npm run build && npm start   # production
 - Print-friendly CSS (Print button) and CSV export of current results
 - Loading, empty, and error states (incl. API quota / plan-limit messages)
 - About & Contact page; JSON proxy at `/api/search`
+- Address typeahead (`/api/address-suggest`) for the address box. Parcel and permit search are unchanged.
+
+## Address suggestions
+
+PermitStack does not offer an autocomplete endpoint. `GET /api/address-suggest?q=` returns JSON from OpenStreetMap Nominatim, server-side only. The PermitStack key is not used and is not in the response. Requests are debounced in the browser, cached, and limited to one upstream call per second.
+
+```json
+{
+  "query": "3533 Sam Allen",
+  "suggestions": [
+    {
+      "label": "3533 Sam Allen Oaks Circle, Plant City, FL 33563",
+      "street": "3533 Sam Allen Oaks Circle",
+      "city": "Plant City",
+      "state": "FL",
+      "zip": "33563"
+    }
+  ],
+  "attribution": "© OpenStreetMap contributors",
+  "status": "ok"
+}
+```
+
+`status` is `ok`, `empty`, `throttled`, or `unavailable`. `zip` and `city` are `null` when Nominatim does not have them. Choosing a suggestion fills `label` and runs the search. OSM coverage misses some new streets, so a typed address still searches.
+
+Typed addresses are parsed before the PermitStack call. `3533 Sam Allen Oaks Cir Plant City` is sent as street `3533 Sam Allen Oaks` and city `Plant City`. Rows whose suffix is Cir, Circle, or CR are kept, which is how the historical `SFR40294` record stays with the modern ones. A different suffix such as Blvd is not kept.
 
 ## Code map
 

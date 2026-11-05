@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import test from "node:test";
 import { sourceAttribution } from "./format";
 import {
@@ -60,6 +60,7 @@ test("Polk sources merge for Lakeland and unqualified addresses, not for Tampa",
   assert.equal(shouldMergePolkSources({ q: "19156 Dove Creek Dr, Tampa, FL" }), false);
   assert.equal(shouldMergePolkSources({ q: "19156 Dove Creek Dr", city: "Tampa" }), false);
   assert.equal(shouldMergePolkSources({ q: "3749 Feather Dr, Lakeland, FL", city: "Tampa" }), false);
+  assert.equal(shouldMergePolkSources({ q: "3533 Sam Allen Oaks Cir Plant City" }), false);
 });
 
 test("source labels distinguish statewide PermitStack from Polk-only records", () => {
@@ -115,23 +116,18 @@ test("user-facing copy describes Florida coverage", () => {
   assert.doesNotMatch(read("src/app/api/search/route.ts"), /polk-fl/);
 });
 
-test("brand assets use Bulldogs red, black wordmark, and a transparent logo", () => {
-  const logo = read("public/logo.svg");
-  const icon = read("public/icon.svg");
-  const css = read("src/app/globals.css");
+test("header uses the supplied transparent logo, larger than the old mark", () => {
+  const logo = readFileSync("public/logo.png");
   const layout = read("src/app/layout.tsx");
-  assert.match(logo, /<title>PermitRewind<\/title>/);
-  assert.match(logo, /#BA0C2F/);
-  assert.match(logo, /#141414/);
-  assert.doesNotMatch(logo, /<text[\s>]/);
-  assert.doesNotMatch(logo, /rect[^>]+width="100%"/);
-  assert.match(icon, /#BA0C2F/);
-  assert.match(icon, /fill-rule="evenodd"/);
-  assert.match(css, /#ba0c2f/);
-  assert.match(layout, /src="\/logo.svg"/);
+  assert.equal(logo.subarray(0, 8).toString("hex"), "89504e470d0a1a0a");
+  assert.equal(logo[25], 6);
+  assert.match(layout, /src="\/logo\.png"/);
   assert.match(layout, /alt="PermitRewind"/);
+  assert.match(layout, /sm:h-14/);
+  assert.doesNotMatch(layout, /logo\.svg/);
+  assert.equal(existsSync("public/logo.svg"), false);
+  assert.match(read("src/app/globals.css"), /#ba0c2f/);
   for (const file of ["src/app/layout.tsx", "src/app/page.tsx", "src/app/search/page.tsx", "src/components/SearchForm.tsx", "src/app/globals.css", "src/lib/format.ts"]) {
-    const text = read(file);
-    assert.doesNotMatch(text, /navy-|sky-/);
+    assert.doesNotMatch(read(file), /navy-|sky-/);
   }
 });

@@ -1,6 +1,7 @@
 "use client";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import AddressSuggestInput from "@/components/AddressSuggestInput";
 import type { SearchMode } from "@/lib/types";
 
 const MODES: { id: SearchMode; label: string; placeholder: string }[] = [
@@ -16,12 +17,18 @@ export default function SearchForm({ initialMode = "address", initialQ = "", com
   const [pending, setPending] = useState(false);
   const current = MODES.find((m) => m.id === mode)!;
 
+  function go(next: string) {
+    const q = next.trim();
+    if (!q) return;
+    setQ(q);
+    setPending(true);
+    router.push(`/search?mode=${mode}&q=${encodeURIComponent(q)}`);
+    setTimeout(() => setPending(false), 1500);
+  }
+
   function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!q.trim()) return;
-    setPending(true);
-    router.push(`/search?mode=${mode}&q=${encodeURIComponent(q.trim())}`);
-    setTimeout(() => setPending(false), 1500);
+    go(q);
   }
 
   return (
@@ -36,8 +43,12 @@ export default function SearchForm({ initialMode = "address", initialQ = "", com
       </div>
       <div className="flex flex-col sm:flex-row gap-2">
         <label htmlFor="q" className="sr-only">{current.label}</label>
-        <input id="q" value={q} onChange={(e) => setQ(e.target.value)} placeholder={current.placeholder} autoComplete="off"
-          className="flex-1 rounded-lg border border-slate-300 bg-white px-4 py-3 text-slate-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-600" />
+        {mode === "address" ? (
+          <AddressSuggestInput id="q" value={q} onChange={setQ} onPick={go} placeholder={current.placeholder} />
+        ) : (
+          <input id="q" value={q} onChange={(e) => setQ(e.target.value)} placeholder={current.placeholder} autoComplete="off"
+            className="flex-1 rounded-lg border border-slate-300 bg-white px-4 py-3 text-slate-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-600" />
+        )}
         <button type="submit" disabled={pending || !q.trim()}
           className="rounded-lg bg-brand-600 hover:bg-brand-700 disabled:opacity-60 px-6 py-3 font-semibold text-white shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white">
           {pending ? "Searching…" : "Search permits"}

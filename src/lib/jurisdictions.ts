@@ -144,6 +144,31 @@ export function isPolkCity(name: string): boolean {
   return !!n && POLK_PLACES.has(n);
 }
 
+/**
+ * Known Florida city at the end of an address, with or without commas.
+ * "3533 Sam Allen Oaks Cir Plant City" → "Plant City".
+ */
+export function trailingKnownCity(q: string): string | null {
+  const norm = q
+    .replace(/[.,]/g, " ")
+    .replace(/\b(FL|FLORIDA)\b/gi, " ")
+    .replace(/\b\d{5}(?:-\d{4})?\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+  let best: string | null = null;
+  let bestLen = 0;
+  for (const city of CITY_SUGGESTIONS) {
+    const c = city.replace(/\./g, "").replace(/\s+/g, " ").trim().toLowerCase();
+    if (!c) continue;
+    if ((norm === c || norm.endsWith(" " + c)) && c.length > bestLen) {
+      best = city;
+      bestLen = c.length;
+    }
+  }
+  return best;
+}
+
 /** City named in "street, City, ST ZIP" — not a guess from the street line. */
 export function localityFromQuery(q: string): string | null {
   const parts = q.split(",").map((s) => s.trim()).filter(Boolean);
@@ -162,7 +187,7 @@ export function localityFromQuery(q: string): string | null {
 export function shouldMergePolkSources(query: { q: string; city?: string | null }): boolean {
   const city = query.city?.trim();
   if (city) return isPolkCity(city);
-  const place = localityFromQuery(query.q);
+  const place = localityFromQuery(query.q) ?? trailingKnownCity(query.q);
   if (place) return isPolkCity(place);
   return true;
 }

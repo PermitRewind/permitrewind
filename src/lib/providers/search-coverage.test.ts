@@ -93,7 +93,8 @@ test("19156 Dove Creek Dr keeps three Tampa permits", async () => {
     assert.ok(result.permits.every((p) => sourceAttribution(p) === "PermitStack · statewide Florida"));
     assert.equal(result.notices.some((n) => /hidden/i.test(n)), false);
     assert.equal(seen?.searchParams.get("state"), "FL");
-    assert.equal(seen?.searchParams.get("address"), "19156 Dove Creek Dr");
+    assert.equal(seen?.searchParams.get("address"), "19156 Dove Creek");
+    assert.equal(seen?.searchParams.get("city"), null);
     assert.equal(seen?.searchParams.get("jurisdiction"), null);
     assert.equal(seen?.pathname, "/v1/permits/search");
   } finally {
@@ -322,6 +323,35 @@ test("Tampa search still surfaces a PermitStack failure when Polk sources are sk
     ).search({ mode: "address", q: "19156 Dove Creek Dr", city: "Tampa" }),
     /down/,
   );
+});
+
+test("3533 Sam Allen Oaks Cir Plant City keeps Cir, Circle, and CR including SFR40294", async () => {
+  let seen: URL | undefined;
+  const rows = [
+    stackRow({ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1", permit_number: "PC-1", address_street: "3533 SAM ALLEN OAKS CIR", address_city: "PLANT CITY", jurisdiction_name: "Plant City" }),
+    stackRow({ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2", permit_number: "PC-2", address_street: "3533 SAM ALLEN OAKS CIRCLE", address_city: "PLANT CITY", jurisdiction_name: "Plant City" }),
+    stackRow({ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3", permit_number: "PC-3", address_street: "3533 SAM ALLEN OAKS CIR", address_city: "PLANT CITY", jurisdiction_name: "Hillsborough County" }),
+    stackRow({ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa4", permit_number: "SFR40294", address_street: "3533 SAM ALLEN OAKS CR", address_city: "PLANT CITY", jurisdiction_name: "Hillsborough County" }),
+    stackRow({ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa5", permit_number: "PC-BLVD", address_street: "3533 SAM ALLEN OAKS BLVD", address_city: "PLANT CITY", jurisdiction_name: "Plant City" }),
+  ];
+  const restore = mockFetch((url) => {
+    seen = url;
+    return { body: { results: rows, total: rows.length, page: 1, per_page: 100 } };
+  });
+  try {
+    for (const q of ["3533 Sam Allen Oaks Cir Plant City", "3533 Sam Allen Oaks Circle, Plant City, FL", "3533 Sam Allen Oaks CR Plant City"]) {
+      const result = await new PermitStackProvider("test-key").search({ mode: "address", q });
+      assert.deepEqual(result.permits.map((p) => p.permitNumber).sort(), ["PC-1", "PC-2", "PC-3", "SFR40294"]);
+      assert.equal(seen?.searchParams.get("address"), "3533 Sam Allen Oaks");
+      assert.equal(seen?.searchParams.get("city"), "Plant City");
+      assert.equal(seen?.searchParams.get("state"), "FL");
+    }
+    await new PermitStackProvider("test-key").search({ mode: "permit", q: "SFR40294" });
+    assert.equal(seen?.searchParams.get("permit_number"), "SFR40294");
+    assert.equal(seen?.searchParams.get("address"), null);
+  } finally {
+    restore();
+  }
 });
 
 test("live PermitStack search for 19156 Dove Creek Dr returns three Tampa permits", { skip: !process.env.PERMITSTACK_API_KEY }, async () => {
