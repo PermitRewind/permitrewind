@@ -23,13 +23,26 @@ test("parses 3533 Sam Allen Oaks Cir Plant City and suffix variants", () => {
     else assert.equal(built.zip, undefined);
   }
   const dove = parseAddressQuery("19156 Dove Creek Dr");
-  assert.equal(toPermitStackAddress(dove).address, "19156 Dove Creek");
+  assert.equal(toPermitStackAddress(dove).address, "19156 Dove Creek Dr");
   assert.equal(dove.city, null);
   assert.equal(dove.zip, null);
   const zipOnly = parseAddressQuery("3533 Sam Allen Oaks Circle, FL 33565");
   assert.equal(zipOnly.city, null);
   assert.equal(zipOnly.zip, "33565");
   assert.deepEqual(toPermitStackAddress(zipOnly), { address: "3533 Sam Allen Oaks", zip: "33565" });
+});
+
+test("Dove Creek keeps directional and Drive rows and drops a different suffix", () => {
+  const parsed = parseAddressQuery("19156 Dove Creek Dr");
+  const keep = [
+    { address: "19156 DOVE CREEK DR", city: "TAMPA" },
+    { address: "19156 DOVE CREEK DRIVE", city: "TAMPA" },
+    { address: "19156 N DOVE CREEK DR", city: "TAMPA" },
+    { address: "19156 DOVE CREEK DR N", city: "TAMPA" },
+  ];
+  assert.equal(keep.every((row) => permitAddressMatches(parsed, row)), true);
+  assert.equal(permitAddressMatches(parsed, { address: "19156 DOVE CREEK BLVD", city: "TAMPA" }), false);
+  assert.equal(permitAddressMatches(parsed, { address: "19156 DOVE CREEK CT", city: "TAMPA" }), false);
 });
 
 test("suffix fallback keeps the four Sam Allen Oaks rows and drops Boulevard", () => {
