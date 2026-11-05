@@ -15,7 +15,7 @@ export function bestDate(p: { dateIssued: string | null; dateFiled: string | nul
 }
 export function statusColor(s?: string | null) {
   switch ((s ?? "").toLowerCase()) {
-    case "final": return "bg-emerald-100 text-emerald-800";
+    case "final": case "finaled": return "bg-emerald-100 text-emerald-800";
     case "issued": return "bg-neutral-200 text-neutral-800";
     case "in_progress": case "filed": return "bg-amber-100 text-amber-800";
     case "expired": case "cancelled": case "revoked": return "bg-rose-100 text-rose-800";
@@ -33,6 +33,7 @@ const SOURCE_LABELS: Record<string, string> = {
   "Polk County Accela": "Polk County Accela · Polk County only",
   "Property Appraiser": "Polk County Property Appraiser · Polk County only",
   "Polk County Property Appraiser": "Polk County Property Appraiser · Polk County only",
+  "City of Davenport": "City of Davenport · city only",
 };
 
 /** Stacked place lines. Empty unit fields are omitted rather than shown as blanks. */
