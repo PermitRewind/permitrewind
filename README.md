@@ -24,6 +24,9 @@ npm run build && npm start   # production
 | `PERMITSTACK_BASE_URL` | no | Defaults to `https://api.permit-stack.com`. |
 | `POLK_ACCELA_ENABLED` | no | Set to `false` to skip the Polk County Accela portal. |
 | `POLK_PA_ENABLED` | no | Set to `false` to skip the Polk County Property Appraiser file. |
+| `DAVENPORT_IWORQ_ENABLED` | no | Set to `false` to skip the City of Davenport iWorQ portal. |
+| `DAVENPORT_CAPTCHA_API_KEY` | no | Solver key for Davenport address search. Server-only. Detail pages do not need it. |
+| `DAVENPORT_CAPTCHA_PROVIDER` | no | `2captcha` (default) or `anticaptcha`. |
 
 ## Features
 
@@ -85,7 +88,7 @@ Typed addresses are parsed before the PermitStack call. A normal suffix such as 
 
 ## Tests
 
-`npm test` runs `src/lib/coverage.test.ts` and `src/lib/providers/search-coverage.test.ts`. The suite mocks PermitStack, so it does not need `PERMITSTACK_API_KEY`. It checks that:
+`npm test` runs `src/lib/coverage.test.ts`, `src/lib/address.test.ts`, `src/lib/providers/search-coverage.test.ts`, and `src/lib/providers/davenport-iworq.test.ts`. The suite mocks PermitStack, so it does not need `PERMITSTACK_API_KEY`. It checks that:
 
 - `19156 Dove Creek Dr` keeps three Tampa / Hillsborough PermitStack rows and does not add a "hidden" notice
 - `3749 Feather Dr, Lakeland, FL` still merges Polk County Accela and Property Appraiser rows onto PermitStack
@@ -130,3 +133,17 @@ python3 scripts/build-pa-permits.py /path/to/ftp_permit.zip   # writes data/pa/*
 `data/pa/` is gitignored (regenerated daily), so it must be present locally when deploying
 (it is bundled via `outputFileTracingIncludes` in `next.config.ts`). If it's missing, that source
 simply returns nothing. Disable with `POLK_PA_ENABLED=false`.
+
+## City of Davenport iWorQ
+
+`src/lib/providers/davenport-iworq.ts` runs only when the city or the address says Davenport. Lakeland, Tampa, and a street with no city do not call it. It merges beside PermitStack and the Polk county sources. Rows are labeled `City of Davenport · city only`.
+
+The portal is https://portal.iworq.net/DAVENPORT/permits/600. Address search is `searchField=text6&search=1832%20Buckeye` (house number plus street name, suffix dropped). That request is invisible reCAPTCHA v2 (site key `6Les_AYkAAAAACw9NzcxkcDVfvExxeyw2KS1cao_`). A request with no token is HTTP 302 back to the form. Detail pages are public: https://portal.iworq.net/DAVENPORT/permit/600/15350875 is permit 210405 at 1832 BUCKEYE RD.
+
+How 1832 Buckeye is retrieved in production:
+
+1. Reuse the `iworq_api_session` cookie from a search that already passed, for about 90 minutes on that server instance.
+2. Otherwise, if `DAVENPORT_CAPTCHA_API_KEY` is set, solve the invisible challenge with 2captcha (`DAVENPORT_CAPTCHA_PROVIDER=2captcha`, the default) or anti-captcha (`DAVENPORT_CAPTCHA_PROVIDER=anticaptcha`). The key is an environment variable. It is not in the repo.
+3. Parse the results table, keep the house, then open the detail page with no captcha. Permit date 04/29/2021 stays the filed date. Issued date 06/25/2021 is Permit Issue Date. Completion date 04/18/2022 is Permit Final Date.
+
+Without a solver key and without a live session, the city source adds a notice and does not call the portal. Statewide and Polk results still return. Disable the source with `DAVENPORT_IWORQ_ENABLED=false`. A live test for 1832 Buckeye runs only when `DAVENPORT_CAPTCHA_API_KEY` is set.

@@ -98,6 +98,10 @@ export class CompositeProvider implements PermitProvider {
   }
 
   getPermit(id: string): Promise<Permit | null> {
+    if (id.startsWith("davenport-iworq:")) {
+      const city = this.extras.find((p) => p.name === "City of Davenport");
+      if (city) return city.getPermit(id);
+    }
     return this.primary.getPermit(id);
   }
 }

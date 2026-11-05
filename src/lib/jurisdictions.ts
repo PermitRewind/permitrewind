@@ -66,7 +66,7 @@ export const REGIONS: Region[] = [FLORIDA_REGION, POLK_REGION];
 export const DEFAULT_REGION = FLORIDA_REGION;
 
 export const COVERAGE_NOTE =
-  "Coverage is statewide Florida through PermitStack. Searches in Polk County also merge Polk County Accela and Polk County Property Appraiser records.";
+  "Coverage is statewide Florida through PermitStack. Searches in Polk County also merge Polk County Accela and Polk County Property Appraiser records. A Davenport address also checks the City of Davenport permit portal.";
 
 const MAJOR_FLORIDA_CITIES = [
   "Apopka", "Boca Raton", "Bonita Springs", "Bradenton", "Brandon", "Cape Coral",
