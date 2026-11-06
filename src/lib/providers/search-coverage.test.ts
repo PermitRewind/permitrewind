@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { sourceAttribution } from "../format";
+import { permitLocationLines, resultsPlaceLabel, sourceAttribution } from "../format";
 import { shouldMergePolkSources } from "../jurisdictions";
 import type { PermitProvider } from "./types";
 import { CompositeProvider } from "./composite";
@@ -550,6 +550,37 @@ test("3938 WhiteDove Dr returns the same three permits for Highland City and Lak
   const fromHighland = (await search("3938 WhiteDove Dr", "Highland City")).permits.map((row) => row.permitNumber).sort();
   assert.deepEqual(fromLakeland, ["WD-1", "WD-2", "WD-3"]);
   assert.deepEqual(fromHighland, fromLakeland);
+});
+
+test("3806 Whitedove Drive returns the two Lakeland permits for either spelling", async () => {
+  const rows = [
+    stackRow({ id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1", permit_number: "BT-2023-9026", address_street: "3806 WHITEDOVE DR", address_city: "LAKELAND", address_zip: "33812", jurisdiction_name: "Polk County", date_issued: "2023-06-01" }),
+    stackRow({ id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee2", permit_number: "BT-2022-20100", address_street: "3806 WHITEDOVE DR", address_city: "LAKELAND", address_zip: "33812", jurisdiction_name: "Polk County", date_issued: "2022-04-01" }),
+    stackRow({ id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee3", permit_number: "BT-OTHER", address_street: "3900 WHITEDOVE DR", address_city: "LAKELAND", address_zip: "33812", jurisdiction_name: "Polk County", date_issued: "2021-01-01" }),
+    stackRow({ id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee4", permit_number: "WH-3806", address_street: "3806 WHITEDOVE DR", address_city: "WINTER HAVEN", address_zip: "33880", jurisdiction_name: "City of Winter Haven", date_issued: "2024-01-01" }),
+  ];
+  const restore = mockFetch((url) => {
+    const address = (url.searchParams.get("address") ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (!address.includes("3806") && !address.includes("whitedove")) return { body: { results: [], total: 0, page: 1, per_page: 100 } };
+    return { body: { results: rows, total: rows.length, page: 1, per_page: 100 } };
+  });
+  try {
+    const provider = new PermitStackProvider("test-key");
+    for (const q of ["3806 Whitedove Drive", "3806 White Dove Drive", "3806 WhiteDove Dr"]) {
+      const result = await provider.search({ mode: "address", q, city: "Lakeland", state: "FL", zip: "33812", county: "Polk" });
+      assert.deepEqual(result.permits.map((permit) => permit.permitNumber).sort(), ["BT-2022-20100", "BT-2023-9026"]);
+      assert.ok(result.permits.every((permit) => /lakeland/i.test(permitLocationLines(permit).join(" "))));
+      assert.match(resultsPlaceLabel({ q, city: "" }, result.permits), /Lakeland/i);
+      assert.match(resultsPlaceLabel({ q, city: "Lakeland" }, result.permits), /Lakeland/);
+    }
+    const open = await provider.search({ mode: "address", q: "3806 Whitedove Drive", state: "FL", zip: "33812", county: "Polk" });
+    assert.ok(open.permits.some((permit) => permit.permitNumber === "BT-2023-9026"));
+    assert.ok(open.permits.some((permit) => permit.permitNumber === "BT-2022-20100"));
+    assert.equal(open.permits.some((permit) => permit.permitNumber === "BT-OTHER"), false);
+    assert.match(resultsPlaceLabel({ q: "3806 Whitedove Drive", city: "" }, open.permits.filter((permit) => permit.permitNumber !== "WH-3806")), /Lakeland/i);
+  } finally {
+    restore();
+  }
 });
 
 test("live PermitStack search for 19156 Dove Creek Dr returns three Tampa permits", { skip: !process.env.PERMITSTACK_API_KEY }, async () => {

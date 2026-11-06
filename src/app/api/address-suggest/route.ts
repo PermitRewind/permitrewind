@@ -21,7 +21,8 @@ import { suggestFloridaAddresses } from "@/lib/address-suggest";
  * }
  *
  * No PermitStack key or other secret is read or returned. Suggestions come from
- * OpenStreetMap Nominatim, paced to one upstream request per second.
+ * OpenStreetMap Nominatim, paced to one upstream request per second. A street
+ * with a ZIP and no locality takes that ZIP's preferred mailing city.
  */
 export async function GET(req: NextRequest) {
   const q = req.nextUrl.searchParams.get("q") ?? "";

@@ -2,6 +2,7 @@ import { signAddressSelection } from "./address-selection";
 import { parseAddressQuery, splitStreetUnit, streetLineWithoutLocality } from "./address";
 import { ADDRESS_SUGGEST_LIMIT, ADDRESS_SUGGEST_MIN_CHARS, addressQueryVariants, citiesNear, intendedCity, streetTokenRank } from "./address-normalize";
 import { isPolkCity } from "./jurisdictions";
+import { mailingCitiesForZips, resetZipLocalityCache } from "./zip-locality";
 
 /**
  * Florida address suggestions. PermitStack has no autocomplete endpoint, so this
@@ -10,6 +11,10 @@ import { isPolkCity } from "./jurisdictions";
  * Nominatim's usage policy allows this only when requests are paced (at most one
  * per second), cached, and sent after the user pauses. The route does that.
  * https://operations.osmfoundation.org/policies/nominatim/
+ *
+ * A house just outside a place polygon comes back with a street and ZIP and no
+ * locality. That blank is filled with the ZIP's preferred mailing city. A city
+ * Nominatim or the visitor already named is left as-is.
  */
 
 export const ADDRESS_SUGGEST_ATTRIBUTION = "© OpenStreetMap contributors";
@@ -51,6 +56,7 @@ export const FLORIDA_VIEWBOX = "-87.7,31.1,-79.8,24.4";
 export function resetAddressSuggestState(): void {
   shared.lastAt = 0;
   shared.cache.clear();
+  resetZipLocalityCache();
 }
 
 interface NominatimAddress {
@@ -213,6 +219,49 @@ function hitAgrees(hit: NominatimHit, typedCity: string | null): boolean {
   return citiesNear(typedCity, locality);
 }
 
+/** Put the ZIP mailing city on a suggestion that still has no locality, and re-sign it. */
+function withMailingCity(suggestion: AddressSuggestion, city: string): AddressSuggestion {
+  const stateZip = [suggestion.state, suggestion.zip].filter(Boolean).join(" ");
+  const label = [suggestion.street, city, stateZip].filter(Boolean).join(", ");
+  const token = signAddressSelection({
+    label,
+    street: suggestion.street,
+    city,
+    state: "FL",
+    zip: suggestion.zip,
+    county: suggestion.county,
+    unitType: suggestion.unitType,
+    unitNumber: suggestion.unitNumber,
+  });
+  return { ...suggestion, label, city, token };
+}
+
+/**
+ * Fill cities only where the geocoder left them blank. A named place such as
+ * Highland City is not replaced by the mailing city. A failed lookup is not
+ * cached, so the next pause can try again.
+ */
+async function fillMissingLocalities(
+  suggestions: AddressSuggestion[],
+  fetchImpl: typeof fetch,
+  signal?: AbortSignal,
+): Promise<{ suggestions: AddressSuggestion[]; complete: boolean }> {
+  const missing = [...new Set(suggestions.filter((row) => !row.city && row.zip).map((row) => row.zip as string))];
+  if (!missing.length) return { suggestions, complete: true };
+  let cities: Map<string, string | null>;
+  try {
+    cities = await mailingCitiesForZips(missing, fetchImpl, signal);
+  } catch {
+    return { suggestions, complete: false };
+  }
+  const next = suggestions.map((row) => {
+    if (row.city || !row.zip) return row;
+    const city = cities.get(row.zip);
+    return city ? withMailingCity(row, city) : row;
+  });
+  return { suggestions: next, complete: missing.every((zip) => cities.has(zip)) };
+}
+
 function remember(cache: Map<string, AddressSuggestResponse>, key: string, value: AddressSuggestResponse) {
   if (cache.size > CACHE_LIMIT) {
     const oldest = cache.keys().next().value;
@@ -319,6 +368,8 @@ export async function suggestFloridaAddresses(
   }
   if (!ranked.length) return empty(query, unavailable ? "unavailable" : "empty");
   ranked = ranked.slice(0, ADDRESS_SUGGEST_LIMIT);
+  const filled = await fillMissingLocalities(ranked, fetchImpl, opts?.signal);
+  ranked = filled.suggestions;
 
   const result: AddressSuggestResponse = {
     query,
@@ -326,6 +377,6 @@ export async function suggestFloridaAddresses(
     attribution: ADDRESS_SUGGEST_ATTRIBUTION,
     status: "ok",
   };
-  remember(state.cache, key, result);
+  if (filled.complete) remember(state.cache, key, result);
   return result;
 }
