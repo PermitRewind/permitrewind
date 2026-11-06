@@ -8,7 +8,7 @@ import { DEFAULT_COUNTY, FLORIDA_COUNTIES } from "@/lib/jurisdictions";
 import type { SearchMode } from "@/lib/types";
 
 const MODES: { id: SearchMode; label: string; placeholder: string }[] = [
-  { id: "address", label: "Address", placeholder: "e.g. 19156 Dove Creek Dr" },
+  { id: "address", label: "Address", placeholder: "e.g. 123 NE Main St, Lakeland or Try “Northeast” or “NE”" },
   { id: "parcel", label: "Parcel ID", placeholder: "e.g. 24-28-15-000000-012345" },
   { id: "permit", label: "Permit #", placeholder: "e.g. BT-2026-14923" },
 ];
@@ -119,7 +119,7 @@ export default function SearchForm({
         <div className="flex flex-col gap-2 text-left">
           <div>
             <label htmlFor="q" className="mb-1 block text-xs font-medium text-slate-600">Street address</label>
-            <AddressSuggestInput id="q" value={q} onChange={onAddressChange} onSelect={onAddressSelect} placeholder={current.placeholder} suggestOnMount={suggestOnMount} />
+            <AddressSuggestInput id="q" value={q} onChange={onAddressChange} onSelect={onAddressSelect} placeholder={current.placeholder} suggestOnMount={suggestOnMount} hintClassName={compact ? "text-slate-500" : "text-neutral-200"} />
           </div>
           {showUnit && (
             <div className="grid grid-cols-2 gap-2">
