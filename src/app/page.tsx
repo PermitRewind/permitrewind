@@ -4,7 +4,7 @@ import { DEFAULT_REGION } from "@/lib/jurisdictions";
 export default function Home() {
   return (
     <>
-      <section className="bg-gradient-to-b from-neutral-950 to-neutral-800 text-white">
+      <section className="bg-neutral-800 text-white">
         <div className="mx-auto max-w-6xl px-4 py-16 sm:py-24 text-center">
           <h1 className="text-3xl sm:text-5xl font-bold tracking-tight">Rewind any property&apos;s permit history</h1>
           <p className="mt-4 text-slate-200 max-w-2xl mx-auto">

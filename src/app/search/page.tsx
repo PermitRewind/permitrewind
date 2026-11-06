@@ -57,12 +57,12 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
     otherCount = result.permits.filter(isOther).length;
     if (!showOther) result = { ...result, permits: result.permits.filter((p) => !isOther(p)) };
   }
-  const sel = "w-full min-w-0 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm";
+  const sel = "w-full min-w-0 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900";
   const modeLabel = { address: "Address", parcel: "Parcel", permit: "Permit #" }[mode];
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-6">
-      <div className="rounded-xl bg-white border border-slate-200 p-4 shadow-sm no-print">
+      <div className="rounded-xl border border-neutral-700 bg-neutral-800 p-4 text-neutral-100 shadow-sm no-print">
         <SearchForm
           initialMode={mode}
           initialQ={query.q}
@@ -113,10 +113,10 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
             <input type="date" name="to" defaultValue={query.dateTo} className={sel} /></label>
           <div className="flex gap-2">
             <button className="flex-1 rounded-md bg-brand-600 hover:bg-brand-700 text-white px-3 py-1.5 font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600">Apply</button>
-            <Link href={`/search?mode=${mode}&q=${encodeURIComponent(query.q)}${query.city ? `&city=${encodeURIComponent(query.city)}` : ""}${addressGate?.ok ? `&sel=${encodeURIComponent(one(sp.sel))}` : ""}`} className="rounded-md px-2 py-1.5 text-slate-600 hover:bg-slate-100">Reset</Link>
+            <Link href={`/search?mode=${mode}&q=${encodeURIComponent(query.q)}${query.city ? `&city=${encodeURIComponent(query.city)}` : ""}${addressGate?.ok ? `&sel=${encodeURIComponent(one(sp.sel))}` : ""}`} className="rounded-md px-2 py-1.5 text-neutral-200 hover:bg-white/10">Reset</Link>
           </div>
         </form>
-        <p className="mt-3 text-xs text-slate-500">{COVERAGE_NOTE}</p>
+        <p className="mt-3 text-xs text-neutral-300">{COVERAGE_NOTE}</p>
       </div>
 
       <div className="print-only mb-4">
