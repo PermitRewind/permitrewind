@@ -1,4 +1,4 @@
-import { compassAbbrev, compassFull, compassPairAbbrev, streetNameForms, streetNamesMatch, fuzzyKnownCity } from "./address-normalize";
+import { compassAbbrev, compassFull, compassPairAbbrev, isIncompleteStreetTypeToken, isSubstantialStreetToken, streetNameForms, streetNamesMatch, fuzzyKnownCity } from "./address-normalize";
 import { CITY_SUGGESTIONS, isPermittingCity, isPolkCity, localityFromQuery, normalizePlace, trailingKnownCity } from "./jurisdictions";
 
 /**
@@ -227,6 +227,25 @@ function shortSuffix(suffix: string | null): string | null {
 /** Street line with a trailing city, state, and ZIP removed. */
 export function streetLineWithoutLocality(raw: string): string {
   return streetRemainder(raw, localityInQuery(raw));
+}
+
+/**
+ * Drop a trailing unfinished street type so "10 Oak D" searches as "10 Oak".
+ * A finished type ("Dr", "Circle") stays. A one-letter fragment with no street
+ * name yet ("10 W") stays, because that letter is still the name.
+ */
+export function queryWithoutIncompleteStreetType(raw: string): string {
+  const trimmed = raw.trim().replace(/\s+/g, " ");
+  const streetTokens = streetLineWithoutLocality(trimmed).split(/\s+/).filter(Boolean);
+  if (streetTokens.length < 3 || !/^\d/.test(streetTokens[0])) return trimmed;
+  const last = streetTokens[streetTokens.length - 1];
+  if (!isIncompleteStreetTypeToken(last)) return trimmed;
+  const nameTokens = streetTokens.slice(1, -1);
+  if (!nameTokens.some((token) => isSubstantialStreetToken(token))) return trimmed;
+  const parsed = parseAddressQuery(trimmed);
+  const keptStreet = streetTokens.slice(0, -1).join(" ");
+  const tail = [parsed.city, parsed.zip].filter(Boolean).join(" ");
+  return [keptStreet, tail].filter(Boolean).join(" ");
 }
 
 function streetLine(number: string | null, dir: string | null, name: string, suffix: string | null): string {

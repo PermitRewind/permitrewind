@@ -5,8 +5,8 @@ import { NextRequest } from "next/server";
 import { GET } from "../app/api/address-suggest/route";
 import { GET as searchGET } from "../app/api/search/route";
 import { addressStreetForms, cityPreference, hardCity, parseAddressQuery, permitAddressMatches, permitAddressQueries, selectPermitsByCity, suffixEquivalents, toPermitStackAddress } from "./address";
-import { isAddressSearchEnabled, reduceComboboxKey } from "./address-combobox";
-import { abbreviateAddress, ADDRESS_SUGGEST_DEBOUNCE_MS, ADDRESS_SUGGEST_LIMIT, ADDRESS_SUGGEST_MIN_CHARS, addressQueryVariants, correctFuzzyCity, expandAddress, highlightAddressLabel, intendedCity, stemStreetTokens, stemTrailingS, streetNameForms, streetNamesMatch } from "./address-normalize";
+import { addedStreetTypeKind, isAddressSearchEnabled, mergeAddressSuggestResponse, reduceComboboxKey } from "./address-combobox";
+import { abbreviateAddress, ADDRESS_SUGGEST_DEBOUNCE_MS, ADDRESS_SUGGEST_LIMIT, ADDRESS_SUGGEST_MIN_CHARS, STREET_TYPE_FALLBACK_CAP, addressQueryVariants, correctFuzzyCity, expandAddress, highlightAddressLabel, intendedCity, stemStreetTokens, stemTrailingS, streetNameForms, streetNamesMatch } from "./address-normalize";
 import { evaluateAddressSubmission, signAddressSelection } from "./address-selection";
 import { FLORIDA_VIEWBOX, nominatimQueryPlan, rankAddressSuggestions, resetAddressSuggestState, suggestFloridaAddresses, suggestionFromNominatim, suggestionQueryPlan } from "./address-suggest";
 import { permitLocationLines, resultsDisplayCity, resultsPlaceLabel } from "./format";
@@ -997,6 +997,120 @@ test("mistyped Lakeland and Bartow still surface that city", { concurrency: fals
     assert.match(bartow.suggestions[0].street, /Central/i);
     assert.ok(bartow.suggestions.some((row) => row.zip === "33830"));
     assert.ok(bartow.suggestions.some((row) => row.county === "Hillsborough"));
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("a house number and street name suggest suffixed roads before a street type is typed", { concurrency: false }, async () => {
+  const suffixWord = /\b(drive|street|circle|road|lane|court|avenue|place|dr|st|cir|rd|ln|ct|ave|pl)\b/i;
+  const whitedove = suggestionQueryPlan("3838 Whitedove");
+  const unsuffixedAt = whitedove.findIndex((q) => /^3838 whitedove, florida$/i.test(q));
+  const driveAt = whitedove.findIndex((q) => /^3838 whitedove drive, florida$/i.test(q));
+  assert.ok(unsuffixedAt >= 0);
+  assert.ok(driveAt > unsuffixedAt);
+  assert.ok(whitedove.some((q) => /^3838 white dove, florida$/i.test(q)));
+  assert.ok(whitedove.findIndex((q) => /^3838 white dove, florida$/i.test(q)) < driveAt);
+  for (const suffix of ["drive", "street", "circle", "road", "lane", "court", "avenue", "place"]) {
+    assert.ok(whitedove.some((q) => new RegExp(`^3838 whitedove ${suffix}, florida$`, "i").test(q)), suffix);
+  }
+  for (const suffix of ["dr", "st", "cir", "rd"]) {
+    assert.ok(whitedove.some((q) => new RegExp(`^3838 whitedove ${suffix}, florida$`, "i").test(q)), suffix);
+  }
+  assert.ok(whitedove.some((q) => /^3838 white dove drive, florida$/i.test(q)));
+  const suffixed = whitedove.filter((q) => suffixWord.test(q));
+  assert.ok(suffixed.length <= STREET_TYPE_FALLBACK_CAP);
+  assert.equal(suffixed.length, STREET_TYPE_FALLBACK_CAP);
+
+  const maple = suggestionQueryPlan("410 Maple");
+  for (const suffix of ["drive", "dr", "street", "st", "circle", "cir", "place", "pl"]) {
+    assert.ok(maple.some((q) => new RegExp(`^410 maple ${suffix}, florida$`, "i").test(q)), suffix);
+  }
+  assert.ok(maple.filter((q) => suffixWord.test(q)).length <= STREET_TYPE_FALLBACK_CAP);
+
+  for (const fragment of ["3838 W", "3838 Wh", "3838 SE"]) {
+    const plan = suggestionQueryPlan(fragment);
+    assert.equal(plan.some((q) => suffixWord.test(q)), false, fragment);
+  }
+
+  const withDr = suggestionQueryPlan("3838 Whitedove Dr");
+  assert.ok(withDr.some((q) => /\bdrive\b/i.test(q)));
+  assert.equal(withDr.some((q) => /\b(circle|lane|court|place)\b/i.test(q)), false);
+
+  for (const partial of ["3838 Whitedove D", "3838 Whitedove Stre", "3838 Whitedove Ci"]) {
+    const plan = suggestionQueryPlan(partial);
+    assert.ok(plan.some((q) => /^3838 whitedove, florida$/i.test(q)), partial);
+    assert.ok(plan.some((q) => /^3838 whitedove drive, florida$/i.test(q)), partial);
+    assert.equal(plan.every((q) => /\b(d|stre|ci)\b/i.test(q)), false, partial);
+    assert.equal(plan.some((q) => /\b(d|stre|ci)\b/i.test(q)), false, partial);
+  }
+
+  const quadrant = suggestionQueryPlan("141 SE Browning");
+  assert.ok(quadrant.some((q) => /^141 southeast browning, florida$/i.test(q)));
+  assert.ok(quadrant.some((q) => /^141 southeast browning circle, florida$/i.test(q)));
+  const circled = suggestionQueryPlan("141 Browning Circle Southeast");
+  assert.equal(circled.some((q) => /\b(drive|lane|court|place)\b/i.test(q)), false);
+
+  const kept = {
+    query: "3838 Whitedove",
+    suggestions: [{ label: "3838 Whitedove Drive, Lakeland, FL 33812" }],
+    status: "ok",
+  };
+  for (const typed of ["3838 Whitedove D", "3838 Whitedove Stre"]) {
+    const merged = mergeAddressSuggestResponse(kept, { query: typed, suggestions: [], status: "empty" });
+    assert.equal(merged.suggestions.length, 1, typed);
+    assert.equal(merged.status, "ok");
+    assert.equal(addedStreetTypeKind(kept.query, typed), "incomplete");
+  }
+  const throttled = mergeAddressSuggestResponse(kept, { query: "3838 Whitedove Dr", suggestions: [], status: "throttled" });
+  assert.equal(throttled.suggestions.length, 1);
+  assert.equal(addedStreetTypeKind(kept.query, "3838 Whitedove Dr"), "complete");
+  const emptyFinished = mergeAddressSuggestResponse(kept, { query: "3838 Whitedove Street", suggestions: [], status: "empty" });
+  assert.equal(emptyFinished.suggestions.length, 0);
+  const other = mergeAddressSuggestResponse(kept, { query: "100 Other", suggestions: [], status: "empty" });
+  assert.equal(other.suggestions.length, 0);
+  const replaced = mergeAddressSuggestResponse(kept, {
+    query: "3838 Whitedove Dr",
+    suggestions: [{ label: "3838 Whitedove Drive, Lakeland, FL 33812" }],
+    status: "ok",
+  });
+  assert.equal(replaced.query, "3838 Whitedove Dr");
+  assert.match(readFileSync("src/components/AddressSuggestInput.tsx", "utf8"), /mergeAddressSuggestResponse/);
+
+  const original = globalThis.fetch;
+  const queries: string[] = [];
+  const drive = {
+    address: {
+      house_number: "3838",
+      road: "Whitedove Drive",
+      city: "Lakeland",
+      county: "Polk County",
+      state: "Florida",
+      postcode: "33812",
+    },
+  };
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url);
+    const q = url.searchParams.get("q") ?? "";
+    queries.push(q);
+    const hit = /\b3838\b/.test(q) && /\bwhitedove\b/i.test(q) && /\b(drive|dr)\b/i.test(q);
+    return new Response(JSON.stringify(hit ? [drive] : []), { status: 200, headers: { "Content-Type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    for (const typed of ["3838 Whitedove", "3838 WhiteDove", "3838 Whitedove D", "3838 Whitedove Stre"]) {
+      queries.length = 0;
+      const result = await suggestFloridaAddresses(typed, { minIntervalMs: 0, state: { lastAt: 0, cache: new Map() } });
+      assert.equal(result.status, "ok", typed);
+      assert.equal(result.suggestions.length, 1, typed);
+      assert.equal(result.suggestions[0].street, "3838 Whitedove Drive");
+      assert.equal(result.suggestions[0].city, "Lakeland");
+      assert.equal(result.suggestions[0].zip, "33812");
+      assert.equal(result.suggestions[0].county, "Polk");
+      assert.equal(evaluateAddressSubmission(result.suggestions[0].street, result.suggestions[0].token).ok, true);
+      assert.doesNotMatch(queries[0], /\b(drive|dr|street|st)\b/i);
+      assert.ok(queries.some((q) => /\bwhitedove drive\b/i.test(q)));
+      assert.equal(queries.some((q) => /\blane\b/i.test(q)), false);
+    }
   } finally {
     globalThis.fetch = original;
   }
