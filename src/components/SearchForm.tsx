@@ -110,7 +110,7 @@ export default function SearchForm({
       <div className="flex gap-1 mb-2" role="tablist" aria-label="Search by">
         {MODES.map((m) => (
           <button key={m.id} type="button" role="tab" aria-selected={mode === m.id} onClick={() => setMode(m.id)}
-            className={`px-3 py-1.5 text-sm rounded-md font-medium transition ${mode === m.id ? (compact ? "bg-brand-600 text-white" : "bg-white text-neutral-950") : compact ? "text-slate-600 hover:bg-slate-200" : "text-neutral-300 hover:bg-white/10"}`}>
+            className={`px-3 py-1.5 text-sm rounded-md font-medium transition ${mode === m.id ? (compact ? "bg-brand-600 text-white" : "bg-white text-neutral-950") : "text-neutral-300 hover:bg-white/10"}`}>
             {m.label}
           </button>
         ))}
@@ -118,40 +118,40 @@ export default function SearchForm({
       {mode === "address" ? (
         <div className="flex flex-col gap-2 text-left">
           <div>
-            <label htmlFor="q" className="mb-1 block text-xs font-medium text-slate-600">Street address</label>
-            <AddressSuggestInput id="q" value={q} onChange={onAddressChange} onSelect={onAddressSelect} placeholder={current.placeholder} suggestOnMount={suggestOnMount} hintClassName={compact ? "text-slate-500" : "text-neutral-200"} />
+            <label htmlFor="q" className="mb-1 block text-xs font-medium text-neutral-200">Street address</label>
+            <AddressSuggestInput id="q" value={q} onChange={onAddressChange} onSelect={onAddressSelect} placeholder={current.placeholder} suggestOnMount={suggestOnMount} hintClassName="text-neutral-300" />
           </div>
           {showUnit && (
             <div className="grid grid-cols-2 gap-2">
-              <label className="text-xs font-medium text-slate-600">Unit type
+              <label className="text-xs font-medium text-neutral-200">Unit type
                 <select value={unitType} onChange={(e) => setUnitType(e.target.value)} className={`${field} mt-1`}>
                   {UNIT_TYPES.map((type) => <option key={type}>{type}</option>)}
                 </select>
               </label>
-              <label className="text-xs font-medium text-slate-600">Unit number
+              <label className="text-xs font-medium text-neutral-200">Unit number
                 <input value={unitNumber} onChange={(e) => setUnitNumber(e.target.value)} className={`${field} mt-1`} inputMode="text" />
               </label>
             </div>
           )}
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            <label className="text-xs font-medium text-slate-600">City
+            <label className="text-xs font-medium text-neutral-200">City
               <input value={city} onChange={(e) => setCity(e.target.value)} className={`${field} mt-1`} />
             </label>
-            <label className="text-xs font-medium text-slate-600">State
+            <label className="text-xs font-medium text-neutral-200">State
               <select value={state} onChange={(e) => setState(e.target.value)} className={`${field} mt-1`}>
                 <option value="FL">FL</option>
               </select>
             </label>
-            <label className="text-xs font-medium text-slate-600">ZIP
+            <label className="text-xs font-medium text-neutral-200">ZIP
               <input value={zip} onChange={(e) => setZip(e.target.value)} className={`${field} mt-1`} inputMode="numeric" maxLength={10} />
             </label>
-            <label className="text-xs font-medium text-slate-600">County
+            <label className="text-xs font-medium text-neutral-200">County
               <select value={county} onChange={(e) => setCounty(e.target.value)} className={`${field} mt-1`}>
                 {FLORIDA_COUNTIES.map((name) => <option key={name}>{name}</option>)}
               </select>
             </label>
           </div>
-          <label className="flex items-center gap-2 text-xs text-slate-600">
+          <label className="flex items-center gap-2 text-xs text-neutral-200">
             <input type="checkbox" checked={broad} onChange={(e) => setBroad(e.target.checked)} />
             Include other cities
           </label>
