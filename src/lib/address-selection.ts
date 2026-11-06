@@ -16,6 +16,10 @@ export interface AddressSelection {
   unitType: string | null;
   unitNumber: string | null;
   county: string | null;
+  /** Nominatim point, when that geocoder response included one. Optional Street View fallback. */
+  lat?: number;
+  /** Nominatim point, when that geocoder response included one. Optional Street View fallback. */
+  lng?: number;
   exp: number;
 }
 
@@ -25,6 +29,24 @@ function secret(): string {
 
 function signBody(body: string): string {
   return createHmac("sha256", secret()).update(body).digest("base64url");
+}
+
+function coordinatePair(lat: unknown, lng: unknown): { lat: number; lng: number } | null {
+  if (typeof lat !== "number" || typeof lng !== "number") return null;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
+  return { lat, lng };
+}
+
+function applyCoordinates(payload: AddressSelection): void {
+  const pair = coordinatePair(payload.lat, payload.lng);
+  if (!pair) {
+    delete payload.lat;
+    delete payload.lng;
+    return;
+  }
+  payload.lat = pair.lat;
+  payload.lng = pair.lng;
 }
 
 export function signAddressSelection(
@@ -38,6 +60,7 @@ export function signAddressSelection(
     ...input,
     exp: input.exp ?? now + TTL_MS,
   };
+  applyCoordinates(payload);
   const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
   return `${body}.${signBody(body)}`;
 }
@@ -54,6 +77,7 @@ export function readAddressSelection(token: string | null | undefined, now = Dat
     const payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as AddressSelection;
     if (!payload?.label || !payload.street || payload.state !== "FL" || typeof payload.exp !== "number") return null;
     if (payload.exp < now) return null;
+    applyCoordinates(payload);
     return payload;
   } catch {
     return null;

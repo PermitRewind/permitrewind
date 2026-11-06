@@ -29,6 +29,10 @@ export interface AddressSuggestion {
   unitType: string | null;
   unitNumber: string | null;
   county: string | null;
+  /** Nominatim latitude, included only when that response had a point. */
+  lat?: number;
+  /** Nominatim longitude, included only when that response had a point. */
+  lng?: number;
   /** Opaque proof that this row was chosen from a server suggestion. */
   token: string;
 }
@@ -75,7 +79,17 @@ interface NominatimAddress {
 }
 
 interface NominatimHit {
+  lat?: string | number;
+  lon?: string | number;
   address?: NominatimAddress;
+}
+
+function coordinatesFromHit(hit: NominatimHit): { lat: number; lng: number } | undefined {
+  const lat = typeof hit.lat === "number" ? hit.lat : Number(hit.lat);
+  const lng = typeof hit.lon === "number" ? hit.lon : Number(hit.lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return undefined;
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return undefined;
+  return { lat, lng };
 }
 
 function empty(query: string, status: AddressSuggestStatus): AddressSuggestResponse {
@@ -107,11 +121,13 @@ export function suggestionFromNominatim(hit: NominatimHit, typedQuery = ""): Add
   const label = [street, city, stateZip].filter(Boolean).join(", ");
   const parsed = parseAddressQuery(street);
   if (!parsed.number || !parsed.streetName) return null;
+  const coords = coordinatesFromHit(hit);
   const token = signAddressSelection({
     label, street, city, state: "FL", zip, county,
     unitType: split.unitType, unitNumber: split.unitNumber,
+    ...coords,
   });
-  return { label, street, city, state: "FL", zip, county, unitType: split.unitType, unitNumber: split.unitNumber, token };
+  return { label, street, city, state: "FL", zip, county, unitType: split.unitType, unitNumber: split.unitNumber, ...coords, token };
 }
 
 /**
@@ -282,6 +298,7 @@ function withMailingCity(suggestion: AddressSuggestion, city: string): AddressSu
     county: suggestion.county,
     unitType: suggestion.unitType,
     unitNumber: suggestion.unitNumber,
+    ...(suggestion.lat != null && suggestion.lng != null ? { lat: suggestion.lat, lng: suggestion.lng } : {}),
   });
   return { ...suggestion, label, city, token };
 }

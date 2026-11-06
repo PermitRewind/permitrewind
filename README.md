@@ -27,6 +27,7 @@ npm run build && npm start   # production
 | `DAVENPORT_IWORQ_ENABLED` | no | Set to `false` to skip the City of Davenport iWorQ harvest and portal. |
 | `DAVENPORT_CAPTCHA_API_KEY` | no | Solver key for Davenport addresses that are not in the harvest cache. Server-only. Not required once the address is cached. |
 | `DAVENPORT_CAPTCHA_PROVIDER` | no | `2captcha` (default) or `anticaptcha`. |
+| `GOOGLE_STREET_VIEW_API_KEY` | no | Server-only Google Street View key. Never `NEXT_PUBLIC_`. Address results show one property photo. If unset, search still runs and the photo area says "No street view available". |
 
 ## Features
 
@@ -37,6 +38,7 @@ npm run build && npm start   # production
 - Loading, empty, and error states (incl. API quota / plan-limit messages)
 - About & Contact page; JSON proxy at `/api/search`
 - Address typeahead (`/api/address-suggest`) for the address box. Parcel and permit search are unchanged.
+- Address results show one Street View photo of the searched property, next to the results heading (not on each permit row)
 
 ## Address suggestions
 
@@ -65,9 +67,17 @@ The address form is separate fields: street, city, state, ZIP, and county (Polk 
 
 When a permitting city is set, other permitting cities are left out. `605 South Central Avenue` with city Bartow does not return a Winter Haven house, even when no Bartow row matches. “Include other cities” keeps other cities of that same street. An unofficial place name (a census place such as Highland City, or any label that is not a permitting city) is not a hard filter. The street is searched, Polk County sources still run when the county is Polk, and ZIP or county keeps the overlapping city — so `3938 WhiteDove Dr` in Highland City returns the same Lakeland permits as a Lakeland search. A mailing city such as Lakeland may be sent as `city`. A permitting city that matches nothing stays empty instead of taking another permitting city's rows. A row that names no permitting city can still match on ZIP or county. The results heading and the city field use that city. When the query city is blank and every permit names the same city, the heading, the city field, and each permit's address line still show it. PermitStack is sent `state` plus an abbreviated `address` (`605 S Central Ave`, not the spelled-out Nominatim line) and `city` only when that city issues permits. `zip_code` is not sent: filters are AND, and a Nominatim ZIP or a blank permit ZIP would hide the row. If that query is empty, the search retries with the core street name (`Central`) and then without city. A compound street is queried with and without the space (`WhiteDove` and `White Dove`, `OakRidge` and `Oak Ridge`). County and unit stay on the selection token and on the result when the record has them.
 
-Address search runs only after a suggestion is chosen. The Search button stays off until then, and editing the text clears the choice. Each suggestion includes an opaque `token`. `GET /api/search` and the results page require that token in `sel` and check that the address has a street number and street name before calling PermitStack. A pasted or bookmarked address without `sel` is not searched; the page asks the visitor to check the spelling or try a nearby cross street and pick from the list. Parcel and permit search do not use `sel`.
+Address search runs only after a suggestion is chosen. The Search button stays off until then, and editing the text clears the choice. Each suggestion includes an opaque `token`. `GET /api/search` and the results page require that token in `sel` and check that the address has a street number and street name before calling PermitStack. A pasted or bookmarked address without `sel` is not searched; the page asks the visitor to check the spelling or try a nearby cross street and pick from the list. Parcel and permit search do not use `sel`. When Nominatim includes a point, that latitude and longitude are stored on the signed `sel` token. Street View uses them only if the address itself has no imagery.
 
 Typed addresses are parsed before the PermitStack call. A normal suffix such as Dr is sent as typed, so `19156 Dove Creek Dr` is the same PermitStack query as before normalization and still returns all three Tampa rows (including roofing permit BTR-23-0567345). `3533 Sam Allen Oaks Cir Plant City` is the exception: Cir, Circle, and CR are widened to street `3533 Sam Allen Oaks` and city `Plant City`, then rows outside that suffix family (such as Blvd) are dropped. That keeps historical `SFR40294` with the modern Cir/Circle rows. A compass point before the name or after the suffix (N, S, E, W, NE, NW, SE, SW, the spelled-out word, or two words such as South East) is a quadrant, not part of the street. `141 Browning Circle Southeast` is searched as `141 Browning Cir`: without that quadrant and with it moved in front (`141 SE Browning Cir`, `141 Southeast Browning Cir`). A permit may omit the quadrant or use that same one in front or behind; a different quadrant does not match. An omitted quadrant still matches in the selected city, including when the source left the city blank. It does not match a bare street that names a different permitting city, so South Central is not East Central and is not a bare Central in another city. `North St` stays the street name North.
+
+## Street View
+
+An address result shows one photo of the searched property beside the permit-count heading. Parcel and permit searches do not. The browser loads it from `GET /api/streetview?address=...` (optional `lat` and `lng` from the signed suggestion). That route reads `GOOGLE_STREET_VIEW_API_KEY` on the server. The key is not a `NEXT_PUBLIC_` variable, not in client components, and not in an `<img src="https://maps.googleapis.com/...">` URL.
+
+The route calls the Street View Metadata API first. Metadata requests are free and unlimited. The Static image (640×360, outdoor) is requested only when metadata status is `OK`. Static image requests count toward Google's 10,000 free images per month. If metadata is not `OK`, the key is missing, or the image fails to load, the page shows "No street view available" instead of a broken image. Search still runs when the key is unset.
+
+Metadata decisions and image bytes are cached in server memory for 24 hours, keyed by the normalized address and by coordinates when a coordinate fallback is used. A repeat search of the same house reuses that cache and does not spend another Static image request. The image response also uses `Cache-Control` so a refresh can be served without calling Google again.
 
 ## Code map
 
@@ -88,7 +98,7 @@ Typed addresses are parsed before the PermitStack call. A normal suffix such as 
 
 ## Tests
 
-`npm test` runs `src/lib/coverage.test.ts`, `src/lib/address.test.ts`, `src/lib/providers/search-coverage.test.ts`, `src/lib/providers/davenport-iworq.test.ts`, and `src/lib/providers/davenport-harvest.test.ts`. The suite mocks PermitStack, so it does not need `PERMITSTACK_API_KEY`. It checks that:
+`npm test` runs `src/lib/coverage.test.ts`, `src/lib/address.test.ts`, `src/lib/streetview.test.ts`, `src/lib/providers/search-coverage.test.ts`, `src/lib/providers/davenport-iworq.test.ts`, and `src/lib/providers/davenport-harvest.test.ts`. The suite mocks PermitStack and Google Street View, so it does not need `PERMITSTACK_API_KEY` or `GOOGLE_STREET_VIEW_API_KEY`. It checks that:
 
 - `19156 Dove Creek Dr` keeps three Tampa / Hillsborough PermitStack rows and does not add a "hidden" notice
 - `3749 Feather Dr, Lakeland, FL` still merges Polk County Accela and Property Appraiser rows onto PermitStack
@@ -96,13 +106,14 @@ Typed addresses are parsed before the PermitStack call. A normal suffix such as 
 - PermitStack ids route to `/permit/[id]`
 - user-facing copy describes Florida coverage
 - `1832 Buckeye Rd, Davenport, FL` resolves permit 210405 from the Davenport harvest cache, an empty address returns nothing, and ingesting the same HTML twice does not duplicate the row
+- Street View serves an image only after metadata status `OK`, returns the fallback with no image request when metadata is not `OK`, and does not call Google when `GOOGLE_STREET_VIEW_API_KEY` is missing
 
 If `PERMITSTACK_API_KEY` is set, one additional test calls the live API for `19156 Dove Creek Dr` and expects three permits at that house in Tampa. The key is read from the environment and is not printed.
 
 ## Deploying to Vercel
 
 1. Import the GitHub repo in Vercel (framework preset: Next.js; defaults are fine).
-2. Project Settings → Environment Variables: add `PERMITSTACK_API_KEY` (Production + Preview), marked Sensitive.
+2. Project Settings → Environment Variables: add `PERMITSTACK_API_KEY` (Production + Preview), marked Sensitive. Add `GOOGLE_STREET_VIEW_API_KEY` the same way for Street View photos. Leave it unset and address search still works; the photo area says "No street view available".
 3. Deploy; preview URLs are created per branch/PR.
 4. Custom domain: add `permitrewind.com` in Vercel → Domains, then at GoDaddy set an `A` record `@ → 76.76.21.21` and `CNAME www → cname.vercel-dns.com` (or follow the values Vercel shows).
 
