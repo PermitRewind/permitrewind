@@ -157,6 +157,18 @@ export function isPolkCity(name: string): boolean {
   return !!n && POLK_PLACES.has(n);
 }
 
+const PERMITTING_CITIES = new Set(CITY_SUGGESTIONS.map((city) => normalizePlace(city)));
+
+/**
+ * A city that issues permits. Census places and other labels Nominatim returns
+ * (Highland City, and any name that is not in the city list) are not permitting
+ * cities, so they cannot be a hard filter.
+ */
+export function isPermittingCity(name: string | null | undefined): boolean {
+  if (!name?.trim()) return false;
+  return PERMITTING_CITIES.has(normalizePlace(name));
+}
+
 /**
  * Known Florida city at the end of an address, with or without commas.
  * "3533 Sam Allen Oaks Cir Plant City" → "Plant City".
@@ -193,15 +205,19 @@ export function localityFromQuery(q: string): string | null {
 }
 
 /**
- * Polk County portals are enhancements. Merge them for Polk cities and for
- * addresses that do not name another city (the property may still be in Polk).
- * Skip them when the search names a Florida city outside Polk, such as Tampa.
+ * Polk County portals are enhancements. Merge them for Polk cities, for an
+ * address that does not name a permitting city, and for an unofficial place
+ * name (a CDP such as Highland City) when the county is Polk or unset.
+ * A permitting city outside Polk, such as Tampa, skips the county portals
+ * even if the county field was left on Polk.
  */
-export function shouldMergePolkSources(query: { q: string; city?: string | null }): boolean {
+export function shouldMergePolkSources(query: { q: string; city?: string | null; county?: string | null }): boolean {
   const city = query.city?.trim();
-  if (city) return isPolkCity(city);
-  const place = localityFromQuery(query.q) ?? trailingKnownCity(query.q);
-  if (place) return isPolkCity(place);
+  if (city && isPermittingCity(city)) return isPolkCity(city);
+  const embedded = !city ? (localityFromQuery(query.q) ?? trailingKnownCity(query.q)) : null;
+  if (embedded && isPermittingCity(embedded)) return isPolkCity(embedded);
+  const county = query.county?.replace(/\s+county$/i, "").trim();
+  if (county && normalizePlace(county) !== "polk") return false;
   return true;
 }
 

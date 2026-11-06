@@ -4,9 +4,9 @@ import test from "node:test";
 import { NextRequest } from "next/server";
 import { GET } from "../app/api/address-suggest/route";
 import { GET as searchGET } from "../app/api/search/route";
-import { cityPreference, parseAddressQuery, permitAddressMatches, suffixEquivalents, toPermitStackAddress } from "./address";
+import { addressStreetForms, cityPreference, hardCity, parseAddressQuery, permitAddressMatches, selectPermitsByCity, suffixEquivalents, toPermitStackAddress } from "./address";
 import { isAddressSearchEnabled, reduceComboboxKey } from "./address-combobox";
-import { abbreviateAddress, ADDRESS_SUGGEST_DEBOUNCE_MS, ADDRESS_SUGGEST_LIMIT, ADDRESS_SUGGEST_MIN_CHARS, addressQueryVariants, correctFuzzyCity, expandAddress, highlightAddressLabel, intendedCity, stemStreetTokens, stemTrailingS } from "./address-normalize";
+import { abbreviateAddress, ADDRESS_SUGGEST_DEBOUNCE_MS, ADDRESS_SUGGEST_LIMIT, ADDRESS_SUGGEST_MIN_CHARS, addressQueryVariants, correctFuzzyCity, expandAddress, highlightAddressLabel, intendedCity, stemStreetTokens, stemTrailingS, streetNameForms, streetNamesMatch } from "./address-normalize";
 import { evaluateAddressSubmission, signAddressSelection } from "./address-selection";
 import { FLORIDA_VIEWBOX, nominatimQueryPlan, rankAddressSuggestions, resetAddressSuggestState, suggestFloridaAddresses, suggestionFromNominatim, suggestionQueryPlan } from "./address-suggest";
 
@@ -485,6 +485,91 @@ test("three character suggest queries reach Nominatim", { concurrency: false }, 
   } finally {
     globalThis.fetch = original;
   }
+});
+
+test("compound street names match with or without a space", () => {
+  assert.equal(streetNamesMatch("White Dove", "WhiteDove"), true);
+  assert.equal(streetNamesMatch("WhiteDove", "WHITE DOVE DR"), true);
+  assert.equal(streetNamesMatch("Oak Ridge", "Oakridge"), true);
+  assert.equal(streetNamesMatch("Creek Side", "Creekside"), true);
+  assert.equal(streetNamesMatch("whitedove", "White Dove"), true);
+  assert.equal(streetNamesMatch("White Dove", "White Dover"), false);
+  assert.equal(streetNamesMatch("Sam Allen", "Samantha"), false);
+  assert.deepEqual(streetNameForms("WhiteDove").map((form) => form.toLowerCase().replace(/\s+/g, "")), ["whitedove", "whitedove"]);
+  assert.ok(streetNameForms("White Dove").some((form) => form.replace(/\s+/g, "").toLowerCase() === "whitedove"));
+  assert.ok(streetNameForms("OakRidge").some((form) => /oak ridge/i.test(form)));
+  assert.equal(streetNameForms("Sam Allen Oaks").length, 1);
+  const compact = addressStreetForms("3938 WhiteDove Dr");
+  const spaced = addressStreetForms("3938 White Dove Dr");
+  assert.deepEqual(compact.map((line) => line.toLowerCase().replace(/[^a-z0-9]/g, "")).sort(), spaced.map((line) => line.toLowerCase().replace(/[^a-z0-9]/g, "")).sort());
+  assert.ok(compact.some((line) => /white dove/i.test(line)));
+  assert.ok(spaced.some((line) => /whitedove/i.test(line)));
+  const oneWord = parseAddressQuery("3938 WhiteDove Dr");
+  const twoWords = parseAddressQuery("3938 White Dove Drive");
+  for (const row of [
+    { address: "3938 WHITEDOVE DR", city: "LAKELAND" },
+    { address: "3938 WHITE DOVE DRIVE", city: "LAKELAND" },
+  ]) {
+    assert.equal(permitAddressMatches(oneWord, row), true);
+    assert.equal(permitAddressMatches(twoWords, row), true);
+  }
+  assert.equal(permitAddressMatches(oneWord, { address: "3938 WHITE DOVER DR", city: "LAKELAND" }), false);
+  assert.equal(permitAddressMatches(twoWords, { address: "3938 WHITE DOVER DR", city: "LAKELAND" }), false);
+  const variants = addressQueryVariants("3938 WhiteDove Dr");
+  assert.ok(variants.some((variant) => /white dove/i.test(variant)));
+  const spacedQuery = addressQueryVariants("10 Oak Ridge Rd");
+  assert.ok(spacedQuery.some((variant) => /oakridge/i.test(variant)));
+  assert.equal(addressQueryVariants("123 NE Main St, Lakeland").some((variant) => /lake land/i.test(variant)), false);
+  const highlighted = highlightAddressLabel("3938 White Dove Drive, Highland City, FL 33812", "3938 WhiteDove");
+  assert.ok(highlighted.some((part) => part.match && part.text === "White"));
+  assert.ok(highlighted.some((part) => part.match && part.text === "Dove"));
+});
+
+test("an unofficial place name does not hard-filter a different permitting city", () => {
+  assert.equal(hardCity("Lakeland"), "Lakeland");
+  assert.equal(hardCity("Lakland"), "Lakeland");
+  assert.equal(hardCity("Highland City"), null);
+  assert.equal(hardCity("Cypress Gardens"), null);
+  assert.equal(cityPreference("Bartow", { city: "WINTER HAVEN", jurisdiction: "City of Winter Haven" }), 2);
+  assert.equal(cityPreference("Highland City", { city: "Lakeland", jurisdiction: "City of Lakeland" }) < 2, true);
+  assert.equal(cityPreference("Cypress Gardens", { city: "Winter Haven", jurisdiction: "City of Winter Haven" }) < 2, true);
+  assert.equal(cityPreference("Highland City", { city: null, jurisdiction: "Polk County" }) < 2, true);
+  const parsed = parseAddressQuery("3938 WhiteDove Dr, Highland City, FL 33812");
+  assert.equal(parsed.number, "3938");
+  assert.equal(parsed.streetName, "WhiteDove");
+  assert.equal(parsed.city, "Highland City");
+  assert.equal(parsed.zip, "33812");
+  assert.equal(toPermitStackAddress(parsed).city, undefined);
+  assert.equal(toPermitStackAddress(parseAddressQuery("3938 White Dove Dr, Lakeland, FL 33812")).city, "Lakeland");
+  const rows = [
+    { city: "Lakeland", jurisdiction: "City of Lakeland", zip: "33812", county: "Polk" },
+    { city: "Lakeland", jurisdiction: "Polk County", zip: "33812", county: "Polk" },
+    { city: "Lakeland", jurisdiction: "Lakeland", zip: null, county: "Polk" },
+    { city: "Tampa", jurisdiction: "Hillsborough County", zip: "33647", county: "Hillsborough" },
+  ];
+  const place = { county: "Polk", zip: "33812" };
+  const asHighland = selectPermitsByCity(rows, { city: "Highland City", ...place });
+  const asLakeland = selectPermitsByCity(rows, { city: "Lakeland", ...place });
+  const asCdp = selectPermitsByCity(
+    [
+      { city: "Winter Haven", jurisdiction: "City of Winter Haven", zip: "33880", county: "Polk" },
+      { city: "Tampa", jurisdiction: "City of Tampa", zip: "33602", county: "Hillsborough" },
+    ],
+    { city: "Cypress Gardens", county: "Polk", zip: "33884" },
+  );
+  assert.equal(asHighland.length, 3);
+  assert.equal(asLakeland.length, 3);
+  assert.deepEqual(asHighland.map((row) => row.city), asLakeland.map((row) => row.city));
+  assert.equal(asCdp.length, 1);
+  assert.equal(asCdp[0].city, "Winter Haven");
+  const bartowOnly = selectPermitsByCity(
+    [
+      { city: "Bartow", jurisdiction: "City of Bartow", county: "Polk" },
+      { city: "Winter Haven", jurisdiction: "City of Winter Haven", county: "Polk" },
+    ],
+    { city: "Bartow", county: "Polk" },
+  );
+  assert.deepEqual(bartowOnly.map((row) => row.city), ["Bartow"]);
 });
 
 test("address box copy explains abbreviations, near matches, and the Polk boost", () => {

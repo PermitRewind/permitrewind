@@ -2,10 +2,12 @@ import { CITY_SUGGESTIONS, trailingKnownCity } from "./jurisdictions";
 
 /**
  * Address lookup variants. Nominatim and permit rows store the same road as
- * "NE" or "Northeast", and as "St" or "Street". Callers search the expanded
- * form, the raw input, and the abbreviated form before near-matches: a trailing
- * s on a street name ("Kings" / "King") and a small city typo ("Lakland" /
- * "Lakeland", "Bartw" / "Bartow").
+ * "NE" or "Northeast", and as "St" or "Street". A compound street is the same
+ * road with or without a space ("WhiteDove" / "White Dove", "OakRidge" /
+ * "Oak Ridge"). Callers search the expanded form, the raw input, and the
+ * abbreviated form before near-matches: a trailing s on a street name
+ * ("Kings" / "King") and a small city typo ("Lakland" / "Lakeland", "Bartw" /
+ * "Bartow").
  *
  * PermitStack's own query string still goes through `toPermitStackAddress`.
  */
@@ -209,7 +211,163 @@ const STREET_OR_DIRECTION = new Set([
   ...Object.keys(STREET_TYPE_ABBREV),
   "fl",
   "florida",
+  "city",
 ]);
+
+/** Second halves of compound street names. Longer tails win (creek before ee). */
+const COMPOUND_TAILS = [
+  "beach", "bridge", "brook", "crest", "creek", "dale", "dove", "field", "ford",
+  "gate", "glen", "grove", "haven", "hill", "hollow", "hurst", "lake", "land",
+  "meadow", "mont", "park", "point", "ridge", "shore", "side", "spring", "stone",
+  "view", "water", "wood",
+].sort((a, b) => b.length - a.length);
+
+function wordsOf(value: string): string[] {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(" ").filter(Boolean);
+}
+
+function isKnownCityWord(word: string): boolean {
+  const norm = word.toLowerCase();
+  return CITY_SUGGESTIONS.some((city) => city.toLowerCase() === norm);
+}
+
+/**
+ * Split one street token into two words. Camel case wins ("WhiteDove"), then a
+ * known tail ("whitedove" → white + dove, "oakridge" → oak + ridge).
+ * Known city names are left whole so Lakeland is not "Lake Land".
+ */
+export function splitCompoundToken(word: string): [string, string] | null {
+  const bare = word.replace(/[^A-Za-z0-9]/g, "");
+  if (!bare || STREET_OR_DIRECTION.has(bare.toLowerCase()) || isKnownCityWord(bare)) return null;
+  const camel = bare.replace(/([a-z])([A-Z])/g, "$1 $2");
+  if (camel !== bare && camel.includes(" ")) {
+    const parts = camel.split(" ");
+    if (parts.length === 2 && parts.every((part) => part.length >= 3)) return [parts[0], parts[1]];
+  }
+  const lower = bare.toLowerCase();
+  for (const tail of COMPOUND_TAILS) {
+    if (!lower.endsWith(tail)) continue;
+    const head = lower.slice(0, lower.length - tail.length);
+    if (head.length >= 3) return [head, tail];
+  }
+  return null;
+}
+
+/** Spaced and joined spellings of one street name. "White Dove" and "WhiteDove" are one road. */
+export function streetNameForms(streetName: string): string[] {
+  const words = streetName.replace(/[^A-Za-z0-9]+/g, " ").trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return [];
+  const forms: string[] = [];
+  const seen = new Set<string>();
+  const add = (parts: string[]) => {
+    const text = parts.join(" ").replace(/\s+/g, " ").trim();
+    const key = text.toLowerCase();
+    if (!text || seen.has(key)) return;
+    seen.add(key);
+    forms.push(text);
+  };
+  add(words);
+  if (words.length === 1) {
+    const split = splitCompoundToken(words[0]);
+    if (split) add(split);
+  } else if (
+    words.length === 2 &&
+    words.every((word) => !STREET_OR_DIRECTION.has(word.toLowerCase()) && !isKnownCityWord(word))
+  ) {
+    add([words[0] + words[1]]);
+  } else {
+    for (let i = 0; i < words.length - 1; i++) {
+      const tail = words[i + 1].toLowerCase();
+      if (STREET_OR_DIRECTION.has(words[i].toLowerCase()) || STREET_OR_DIRECTION.has(tail)) continue;
+      if (isKnownCityWord(words[i]) || isKnownCityWord(words[i + 1])) continue;
+      if (!COMPOUND_TAILS.includes(tail)) continue;
+      add([...words.slice(0, i), words[i] + words[i + 1], ...words.slice(i + 2)]);
+    }
+  }
+  return forms;
+}
+
+/**
+ * The same street name with the space removed or inserted.
+ * House numbers and suffixes are ignored so "3938 White Dove Dr" matches "WHITEDOVE".
+ * "White Dover" does not match "White Dove".
+ */
+export function streetNamesMatch(a: string, b: string): boolean {
+  const significant = (value: string) => wordsOf(value).filter((word, index, all) => {
+    if (index === 0 && /^\d/.test(word) && all.length > 1) return false;
+    return !STREET_OR_DIRECTION.has(word);
+  });
+  const left = significant(a);
+  const right = significant(b);
+  if (!left.length || !right.length) return false;
+  const collapse = (words: string[]) => words.join("");
+  if (collapse(left) === collapse(right)) return true;
+  const [shorter, longer] = collapse(left).length <= collapse(right).length ? [left, right] : [right, left];
+  const target = collapse(shorter);
+  let acc = "";
+  for (const token of longer) {
+    acc += token;
+    if (acc === target) return true;
+  }
+  return false;
+}
+
+function queryTokens(query: string): string[] {
+  return query.trim().replace(/\s+/g, " ").split(" ").filter(Boolean);
+}
+
+function nameTokenIndexes(tokens: string[]): number[] {
+  const indexes: number[] = [];
+  for (let index = 0; index < tokens.length; index++) {
+    const bare = tokens[index].replace(/[^A-Za-z0-9]/g, "");
+    if (tokens[index].includes(",")) break;
+    if (!bare || /^\d/.test(bare) || STREET_OR_DIRECTION.has(bare.toLowerCase()) || isKnownCityWord(bare)) continue;
+    indexes.push(index);
+  }
+  return indexes;
+}
+
+/** Other spacing of a compound street, for geocoder and permit queries. */
+export function compoundAddressVariants(query: string): string[] {
+  const tokens = queryTokens(query);
+  const names = nameTokenIndexes(tokens);
+  const variants: string[] = [];
+  const seen = new Set<string>();
+  const add = (next: string[]) => {
+    const text = next.join(" ").replace(/\s+/g, " ").trim();
+    const key = text.toLowerCase();
+    if (!text || seen.has(key) || key === query.trim().toLowerCase().replace(/\s+/g, " ")) return;
+    seen.add(key);
+    variants.push(text);
+  };
+  names.forEach((index) => {
+    if (tokens[index + 1]?.replace(/[^A-Za-z]/g, "").toLowerCase() === "city") return;
+    const split = splitCompoundToken(tokens[index]);
+    if (!split) return;
+    const next = tokens.slice();
+    next[index] = split.join(" ");
+    add(next);
+  });
+  if (names.length === 2) {
+    const [first, second] = names;
+    if (second === first + 1) {
+      const next = tokens.slice();
+      next.splice(first, 2, tokens[first].replace(/[^A-Za-z0-9]/g, "") + tokens[second].replace(/[^A-Za-z0-9]/g, ""));
+      add(next);
+    }
+  }
+  for (let i = 0; i < names.length - 1; i++) {
+    const left = names[i];
+    const right = names[i + 1];
+    if (right !== left + 1) continue;
+    const tail = tokens[right].replace(/[^A-Za-z]/g, "").toLowerCase();
+    if (!COMPOUND_TAILS.includes(tail)) continue;
+    const next = tokens.slice();
+    next.splice(left, 2, tokens[left].replace(/[^A-Za-z0-9]/g, "") + tokens[right].replace(/[^A-Za-z0-9]/g, ""));
+    add(next);
+  }
+  return variants;
+}
 
 const CITY_MATCHES = [...new Set(CITY_SUGGESTIONS)]
   .map((name) => ({ name, norm: normCity(name) }))
@@ -459,8 +617,11 @@ export function pluralizeStreetToken(query: string): string | null {
 export function streetTokenRank(query: string, street: string): number {
   const { words } = prepare(query);
   const wanted = streetNameIndexes(words).map((index) => words[index]);
-  if (!wanted.length) return 0;
   const road = street.toLowerCase().split(/[^a-z0-9]+/).filter((token) => token && !STREET_OR_DIRECTION.has(token) && !/^\d/.test(token));
+  const limit = words.length - localityWordCount(words);
+  const compoundWords = words.filter((word, index) => index < limit && !word.startsWith("placehold") && !/^\d/.test(word) && !STREET_OR_DIRECTION.has(word) && word.length >= 3);
+  if (compoundWords.length && road.length && streetNamesMatch(compoundWords.join(" "), road.join(" "))) return 0;
+  if (!wanted.length) return 0;
   const rankOf = (token: string) => {
     if (road.some((part) => part === token)) return 0;
     const stem = stemTrailingS(token);
@@ -501,6 +662,9 @@ export function addressQueryVariants(query: string): string[] {
   for (const variant of [expanded, original, abbreviateAddress(original)]) {
     pushVariant(variants, seen, variant);
   }
+  for (const variant of [...variants]) {
+    for (const alt of compoundAddressVariants(variant)) pushVariant(variants, seen, alt);
+  }
   pushFuzzy(variants, seen, stemStreetTokens(expanded));
   const corrected = correctFuzzyCity(expanded) ?? correctFuzzyCity(original);
   if (corrected) {
@@ -532,7 +696,17 @@ export function highlightAddressLabel(label: string, query: string): { text: str
       forms.add(token);
       const stemmed = stemTrailingS(token);
       if (stemmed !== token) forms.add(stemmed);
+      const split = splitCompoundToken(token);
+      if (split) {
+        forms.add(split[0].toLowerCase());
+        forms.add(split[1].toLowerCase());
+      }
     }
+  }
+  const typed = query.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  for (let i = 0; i < typed.length - 1; i++) {
+    if (STREET_OR_DIRECTION.has(typed[i]) || STREET_OR_DIRECTION.has(typed[i + 1])) continue;
+    forms.add(typed[i] + typed[i + 1]);
   }
   return label.split(/([^A-Za-z0-9]+)/).filter((part) => part !== "").map((text) => ({
     text,

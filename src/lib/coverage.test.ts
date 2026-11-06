@@ -7,6 +7,7 @@ import {
   DEFAULT_REGION,
   POLK_REGION,
   getRegion,
+  isPermittingCity,
   isPolkCity,
   permitInCoverage,
   shouldMergePolkSources,
@@ -61,6 +62,14 @@ test("Polk sources merge for Lakeland and unqualified addresses, not for Tampa",
   assert.equal(shouldMergePolkSources({ q: "19156 Dove Creek Dr", city: "Tampa" }), false);
   assert.equal(shouldMergePolkSources({ q: "3749 Feather Dr, Lakeland, FL", city: "Tampa" }), false);
   assert.equal(shouldMergePolkSources({ q: "3533 Sam Allen Oaks Cir Plant City" }), false);
+  assert.equal(shouldMergePolkSources({ q: "3938 WhiteDove Dr", city: "Highland City", county: "Polk" }), true);
+  assert.equal(shouldMergePolkSources({ q: "10 Oak Ridge Rd", city: "Cypress Gardens", county: "Polk" }), true);
+  assert.equal(shouldMergePolkSources({ q: "10 Main St", city: "Highland City", county: "Hillsborough" }), false);
+  assert.equal(shouldMergePolkSources({ q: "10 Main St", city: "Tampa", county: "Polk" }), false);
+  assert.equal(isPermittingCity("Lakeland"), true);
+  assert.equal(isPermittingCity("Bartow"), true);
+  assert.equal(isPermittingCity("Highland City"), false);
+  assert.equal(isPermittingCity("Cypress Gardens"), false);
 });
 
 test("source labels distinguish statewide PermitStack from Polk-only records", () => {
