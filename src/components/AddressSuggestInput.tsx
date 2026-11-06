@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useId, useRef, useState } from "react";
-import { reduceComboboxKey } from "@/lib/address-combobox";
+import { mergeAddressSuggestResponse, reduceComboboxKey } from "@/lib/address-combobox";
 import { ADDRESS_SUGGEST_DEBOUNCE_MS, ADDRESS_SUGGEST_MIN_CHARS, highlightAddressLabel } from "@/lib/address-normalize";
 import type { AddressSuggestResponse, AddressSuggestion } from "@/lib/address-suggest";
 
@@ -50,13 +50,14 @@ export default function AddressSuggestInput({
         .then((res) => res.json() as Promise<AddressSuggestResponse>)
         .then((body) => {
           if (controller.signal.aborted) return;
-          setPayload(body);
+          setPayload((current) => mergeAddressSuggestResponse(current, body));
           setOpen(true);
           setActive(-1);
         })
         .catch(() => {
           if (controller.signal.aborted) return;
-          setPayload({ query: value.trim(), suggestions: [], attribution: "© OpenStreetMap contributors", status: "unavailable" });
+          const failed: AddressSuggestResponse = { query: value.trim(), suggestions: [], attribution: "© OpenStreetMap contributors", status: "unavailable" };
+          setPayload((current) => mergeAddressSuggestResponse(current, failed));
           setOpen(true);
         })
         .finally(() => {

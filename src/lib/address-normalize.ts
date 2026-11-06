@@ -286,6 +286,76 @@ const COMPOUND_TAILS = [
   "view", "water", "wood",
 ].sort((a, b) => b.length - a.length);
 
+/**
+ * Street types Nominatim often needs after a house number and street name.
+ * Full words are tried first. Abbreviations are the same roads, not extra places.
+ */
+export const STREET_TYPE_FALLBACKS: { full: string; abbrev: string }[] = [
+  { full: "drive", abbrev: "dr" },
+  { full: "street", abbrev: "st" },
+  { full: "circle", abbrev: "cir" },
+  { full: "road", abbrev: "rd" },
+  { full: "lane", abbrev: "ln" },
+  { full: "court", abbrev: "ct" },
+  { full: "avenue", abbrev: "ave" },
+  { full: "place", abbrev: "pl" },
+];
+
+/**
+ * Extra map queries after the unsuffixed plan misses.
+ * A single spelling uses eight full types and eight abbreviations.
+ * A compound spelling uses the full types, then Drive/Street/Circle/Road
+ * as abbreviations and as the other spacing, and stops at this cap.
+ */
+export const STREET_TYPE_FALLBACK_CAP = 16;
+
+/** Suffixes parseAddressQuery accepts that the expand/abbrev maps do not list. */
+const EXTRA_COMPLETE_STREET_TYPES = new Set(["way", "loop", "run", "path", "cr", "circl"]);
+
+const COMPLETE_STREET_TYPE_TOKENS = new Set<string>([
+  ...Object.keys(STREET_TYPE_EXPAND),
+  ...Object.keys(STREET_TYPE_ABBREV),
+  ...EXTRA_COMPLETE_STREET_TYPES,
+]);
+
+const INCOMPLETE_STREET_TYPE_PREFIXES = new Set<string>();
+for (const token of COMPLETE_STREET_TYPE_TOKENS) {
+  for (let len = 1; len < token.length && len <= 4; len++) {
+    INCOMPLETE_STREET_TYPE_PREFIXES.add(token.slice(0, len));
+  }
+}
+for (const token of COMPLETE_STREET_TYPE_TOKENS) INCOMPLETE_STREET_TYPE_PREFIXES.delete(token);
+for (const tail of COMPOUND_TAILS) INCOMPLETE_STREET_TYPE_PREFIXES.delete(tail);
+
+function streetTypeLetters(token: string): string {
+  return token.toLowerCase().replace(/[^a-z]/g, "");
+}
+
+/** "Dr", "Drive", "Cir", and "Way" are finished street types. "D" and "Stre" are not. */
+export function isCompleteStreetTypeToken(token: string): boolean {
+  const letters = streetTypeLetters(token);
+  return letters.length > 0 && COMPLETE_STREET_TYPE_TOKENS.has(letters);
+}
+
+/**
+ * A trailing token the visitor has started but not finished: "D", "S", "C", "Stre", "Ci".
+ * "Park" stays a name word. "Dr" and "SE" are finished and return false.
+ */
+export function isIncompleteStreetTypeToken(token: string): boolean {
+  const letters = streetTypeLetters(token);
+  if (!letters || letters.length > 4 || isCompleteStreetTypeToken(token)) return false;
+  return INCOMPLETE_STREET_TYPE_PREFIXES.has(letters);
+}
+
+/** A real street-name word, not a house number, quadrant, or suffix fragment. */
+export function isSubstantialStreetToken(token: string): boolean {
+  const letters = streetTypeLetters(token);
+  if (letters.length < 3) return false;
+  if (compassAbbrev(token)) return false;
+  if (isCompleteStreetTypeToken(token) || isIncompleteStreetTypeToken(token)) return false;
+  return true;
+}
+
 function wordsOf(value: string): string[] {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(" ").filter(Boolean);
 }

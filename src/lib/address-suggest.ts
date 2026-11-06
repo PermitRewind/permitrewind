@@ -1,6 +1,6 @@
 import { signAddressSelection } from "./address-selection";
-import { parseAddressQuery, splitStreetUnit, streetLineWithoutLocality } from "./address";
-import { ADDRESS_SUGGEST_LIMIT, ADDRESS_SUGGEST_MIN_CHARS, addressQueryVariants, citiesNear, intendedCity, streetTokenRank } from "./address-normalize";
+import { parseAddressQuery, queryWithoutIncompleteStreetType, splitStreetUnit, streetLineWithoutLocality } from "./address";
+import { ADDRESS_SUGGEST_LIMIT, ADDRESS_SUGGEST_MIN_CHARS, STREET_TYPE_FALLBACK_CAP, STREET_TYPE_FALLBACKS, addressQueryVariants, citiesNear, compassFull, expandAddress, intendedCity, isSubstantialStreetToken, streetNameForms, streetTokenRank } from "./address-normalize";
 import { isPolkCity } from "./jurisdictions";
 import { mailingCitiesForZips, resetZipLocalityCache } from "./zip-locality";
 
@@ -133,23 +133,73 @@ export function nominatimQueryPlan(raw: string): string[] {
 }
 
 /**
+ * House number plus a street name, with no finished street type.
+ * "10 W" is only a fragment, so it does not qualify.
+ */
+function streetTypeFallbackVariants(raw: string): string[] {
+  const parsed = parseAddressQuery(raw);
+  if (!parsed.number || !parsed.streetName || parsed.suffix) return [];
+  if (!parsed.streetName.split(/\s+/).some((token) => isSubstantialStreetToken(token))) return [];
+  const names = streetNameForms(expandAddress(parsed.streetName)).slice(0, 2);
+  if (!names.length) return [];
+  const pre = parsed.preDirectional ? compassFull(parsed.preDirectional)?.toLowerCase() ?? parsed.preDirectional.toLowerCase() : null;
+  const post = parsed.postDirectional ? compassFull(parsed.postDirectional)?.toLowerCase() ?? parsed.postDirectional.toLowerCase() : null;
+  const line = (name: string, suffix: string) => [parsed.number, pre, name, suffix, post].filter(Boolean).join(" ");
+  const lines: string[] = [];
+  const seen = new Set<string>();
+  const push = (name: string, suffix: string) => {
+    const text = line(name, suffix);
+    const key = text.toLowerCase();
+    if (!text || seen.has(key)) return;
+    seen.add(key);
+    lines.push(text);
+  };
+  const [primary, alternate] = names;
+  for (const type of STREET_TYPE_FALLBACKS) push(primary, type.full);
+  if (!alternate) {
+    for (const type of STREET_TYPE_FALLBACKS) push(primary, type.abbrev);
+  } else {
+    // Full word on the typed spelling already covers every type. Abbreviations
+    // and the other compound spelling share the remaining slots, Drive first.
+    for (const type of STREET_TYPE_FALLBACKS.slice(0, 4)) push(primary, type.abbrev);
+    for (const type of STREET_TYPE_FALLBACKS.slice(0, 4)) push(alternate, type.full);
+  }
+  return lines.slice(0, STREET_TYPE_FALLBACK_CAP);
+}
+
+/**
  * Expanded form first (Northeast / Street), then the raw input, then the
  * abbreviated form (NE / St), then near-matches (King for Kings, Lakeland for
  * Lakland). Each variant also drops a trailing city the way `nominatimQueryPlan`
  * does. A city-qualified hit stops the search. A different city from the
  * city-stripped fallback does not, while a later variant still names the city
  * the visitor typed.
+ *
+ * When the line is a house number and street name with no finished street type,
+ * common types (Drive, Street, Circle, and the rest of that set) are appended
+ * after those variants and capped. An unfinished trailing type ("D", "Stre")
+ * is dropped first so it is not the only lookup.
  */
 export function suggestionQueryPlan(raw: string): string[] {
+  const query = queryWithoutIncompleteStreetType(raw);
   const seen = new Set<string>();
   const plan: string[] = [];
-  for (const variant of addressQueryVariants(raw)) {
+  const add = (variant: string) => {
+    let added = 0;
     for (const q of nominatimQueryPlan(variant)) {
       const key = q.toLowerCase().replace(/\s+/g, " ").trim();
       if (!key || seen.has(key)) continue;
       seen.add(key);
       plan.push(q);
+      added += 1;
     }
+    return added;
+  };
+  for (const variant of addressQueryVariants(query)) add(variant);
+  let extra = 0;
+  for (const variant of streetTypeFallbackVariants(query)) {
+    if (extra >= STREET_TYPE_FALLBACK_CAP) break;
+    extra += add(variant);
   }
   return plan;
 }
