@@ -7,6 +7,7 @@ import { CITY_SUGGESTIONS, COVERAGE_NOTE, DEFAULT_COUNTY, DEFAULT_REGION, PERMIT
 import { ADDRESS_SUGGEST_MIN_CHARS } from "@/lib/address-normalize";
 import { ADDRESS_SELECTION_MESSAGE, evaluateAddressSubmission } from "@/lib/address-selection";
 import { Permit, ProviderError, SearchMode, SearchQuery, SearchResult } from "@/lib/types";
+import { shownPermitCity } from "@/lib/address";
 import { bestDate, finalDate, fmtDate, fmtLabel, permitLocationLines, resultsDisplayCity, resultsPlaceLabel, sourceAttribution, statusColor } from "@/lib/format";
 import { permitLinkTarget } from "@/lib/permit-link";
 
@@ -55,7 +56,14 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
   if (result) {
     const isOther = (p: Permit) => p.recordKind === "other";
     otherCount = result.permits.filter(isOther).length;
-    if (!showOther) result = { ...result, permits: result.permits.filter((p) => !isOther(p)) };
+    const visible = showOther ? result.permits : result.permits.filter((p) => !isOther(p));
+    result = {
+      ...result,
+      permits: visible.map((p) => {
+        const city = shownPermitCity(query.city, p);
+        return city && city !== p.city ? { ...p, city } : p;
+      }),
+    };
   }
   const displayCity = resultsDisplayCity(query.city, result?.permits ?? []);
   const placeLabel = resultsPlaceLabel({ q: query.q, city: query.city }, result?.permits ?? []);

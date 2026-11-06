@@ -365,11 +365,15 @@ function rowQuadrants(parts: string[]): string[] {
  * Same house and street name. Equivalent suffixes (Dr/Drive, Cir/Circle/CR) match.
  * A direction before or after the suffix still matches, including when the query
  * named that quadrant and the row omitted it. A different quadrant does not.
+ * A bare street that names a different permitting city is not this quadrant:
+ * the directional may have been dropped from the source row. The selected city
+ * can be a separate field, so it is passed beside the parsed street.
  * A different suffix family does not.
  */
 export function permitAddressMatches(
   parsed: ParsedAddress,
   permit: { address?: string | null; city?: string | null; jurisdiction?: string | null },
+  selectedCity?: string | null,
 ): boolean {
   if (!parsed.streetName) return true;
   const line = permit.address ?? "";
@@ -381,12 +385,17 @@ export function permitAddressMatches(
   const resolvedCity = hardCity(parsed.city);
   if (!containsSequence(canonDirections(rowTokens), nameTokens) && !streetNamesMatch(line, nameTokens.join(" "))) return false;
   const expected = [...new Set([parsed.preDirectional, parsed.postDirectional].filter((dir): dir is string => !!dir))];
-  if (expected.length && rowQuadrants(rowTokens).some((dir) => !expected.includes(dir))) return false;
+  const rowDirs = rowQuadrants(rowTokens);
+  if (expected.length && rowDirs.some((dir) => !expected.includes(dir))) return false;
   if (parsed.suffix) {
     const rowSuffix = suffixInLine(line);
     if (rowSuffix && !suffixEquivalents(parsed.suffix).includes(rowSuffix)) return false;
   }
   if (resolvedCity && cityPreference(resolvedCity, permit) >= 2) return false;
+  if (expected.length && !rowDirs.length) {
+    const selected = hardCity(selectedCity) ?? resolvedCity;
+    if (selected && cityPreference(selected, permit) >= 2) return false;
+  }
   return true;
 }
 
@@ -472,9 +481,9 @@ export function placeKeeps(
 }
 
 /**
- * Street matches stay. A permitting city drops other cities when it has any
- * match. An unofficial place, or a city filter that would drop every row,
- * keeps ZIP/county matches instead of returning nothing.
+ * Street matches stay. A permitting city never keeps a different permitting
+ * city, even when that leaves no rows. Rows that name no permitting city stay.
+ * An unofficial place keeps ZIP or county matches instead of returning nothing.
  */
 export function selectPermitsByCity<T extends { city?: string | null; jurisdiction?: string | null; zip?: string | null; county?: string | null }>(
   permits: T[],
@@ -482,15 +491,29 @@ export function selectPermitsByCity<T extends { city?: string | null; jurisdicti
 ): T[] {
   if (!query.city?.trim() || query.broaden) return permits;
   const resolved = hardCity(query.city);
-  if (resolved) {
-    const matched = permits.filter((permit) => cityPreference(resolved, permit) < 2);
-    if (matched.length) return matched;
-  }
+  if (resolved) return permits.filter((permit) => cityPreference(resolved, permit) < 2);
   if (query.county || query.zip) {
     const placed = permits.filter((permit) => placeKeeps(permit, query));
     if (placed.length) return placed;
   }
   return permits;
+}
+
+/**
+ * City to print on a kept row. The selected permitting city fills a blank or
+ * unrecognized source city. A different permitting city is left as stored,
+ * because that row is a different house and should already have been dropped.
+ */
+export function shownPermitCity(
+  selectedCity: string | null | undefined,
+  permit: { city?: string | null; jurisdiction?: string | null },
+): string | null {
+  const selected = hardCity(selectedCity);
+  const source = permit.city?.trim() || "";
+  if (selected && cityPreference(selected, permit) >= 2) return source || null;
+  if (!source) return selected ?? (selectedCity?.trim() || null);
+  if (selected && !hardCity(source)) return selected;
+  return source;
 }
 
 const UNIT_LABEL: Record<string, string> = { APT: "Apt", APARTMENT: "Apt", UNIT: "Unit", STE: "Suite", SUITE: "Suite" };

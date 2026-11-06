@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { shownPermitCity } from "../address";
 import { permitLocationLines, resultsPlaceLabel, sourceAttribution } from "../format";
 import { shouldMergePolkSources } from "../jurisdictions";
 import type { PermitProvider } from "./types";
@@ -152,6 +153,123 @@ test("selected Bartow search falls back when the abbreviated city query misses",
   } finally {
     restore();
   }
+});
+
+test("605 South Central Avenue Bartow does not return a bare or east Central row from another city", async () => {
+  const winterBare = stackRow({
+    id: "cccccccc-cccc-4ccc-8ccc-ccccccccccc1",
+    permit_number: "2019-00116512",
+    address_street: "605 CENTRAL",
+    address_city: "WINTER HAVEN",
+    address_zip: "33880",
+    jurisdiction_name: "City of Winter Haven",
+    description_raw: "SHED",
+    category: "COM ADDN",
+    date_issued: "2019-08-12",
+  });
+  const winterEast = stackRow({
+    id: "cccccccc-cccc-4ccc-8ccc-ccccccccccc3",
+    permit_number: "WH-EAST",
+    address_street: "605 E CENTRAL AVE",
+    address_city: "WINTER HAVEN",
+    address_zip: "33880",
+    jurisdiction_name: "City of Winter Haven",
+    date_issued: "2019-08-12",
+  });
+  const bartowBare = stackRow({
+    id: "cccccccc-cccc-4ccc-8ccc-ccccccccccc2",
+    permit_number: "BT-BARE",
+    address_street: "605 CENTRAL",
+    address_city: "BARTOW",
+    address_zip: "33830",
+    jurisdiction_name: "City of Bartow",
+    date_issued: "2018-01-01",
+  });
+  const restore = mockFetch((url) => {
+    const address = url.searchParams.get("address") ?? "";
+    if (address === "605 S Central Ave" || address === "605 South Central Ave") {
+      return { body: { results: [], total: 0, page: 1, per_page: 100 } };
+    }
+    return { body: { results: [winterBare, winterEast, bartowBare], total: 3, page: 1, per_page: 100 } };
+  });
+  try {
+    const result = await new PermitStackProvider("test-key").search({
+      mode: "address",
+      q: "605 South Central Avenue",
+      city: "Bartow",
+      state: "FL",
+      zip: "33830",
+      county: "Polk",
+    });
+    assert.deepEqual(result.permits.map((permit) => permit.permitNumber), ["BT-BARE"]);
+    const lines = result.permits.flatMap((permit) => permitLocationLines({ ...permit, city: shownPermitCity("Bartow", permit) }));
+    assert.match(lines.join("\n"), /Bartow/i);
+    assert.equal(lines.some((line) => /winter haven/i.test(line)), false);
+  } finally {
+    restore();
+  }
+});
+
+test("a Bartow selection does not merge another city's bare Central row from a county source", async () => {
+  const winter = permit({
+    id: "polk-pa:other:2019-00116512",
+    permitNumber: "2019-00116512",
+    address: "605 CENTRAL",
+    city: "Winter Haven",
+    jurisdiction: "Winter Haven",
+    description: "SHED",
+    category: "COM ADDN",
+    source: "Polk County Property Appraiser",
+    dateIssued: "2019-08-12",
+  });
+  const east = permit({
+    id: "polk-pa:other:WH-EAST",
+    permitNumber: "WH-EAST",
+    address: "605 E CENTRAL AVE",
+    city: "Winter Haven",
+    jurisdiction: "City of Winter Haven",
+    source: "Polk County Property Appraiser",
+    dateIssued: "2019-08-12",
+  });
+  const county = permit({
+    id: "polk-pa:county:COUNTY-1",
+    permitNumber: "COUNTY-1",
+    address: "605 CENTRAL",
+    city: null,
+    jurisdiction: "Polk County",
+    county: "Polk",
+    source: "Polk County Property Appraiser",
+    dateIssued: "2014-04-01",
+  });
+  const extra = (permits: Permit[]): PermitProvider => ({
+    name: "Polk County Property Appraiser",
+    appliesTo: shouldMergePolkSources,
+    async search() {
+      return { permits, total: permits.length, page: 1, perPage: permits.length, notices: [] };
+    },
+    async getPermit() {
+      return null;
+    },
+  });
+  const search = (rows: Permit[]) => new CompositeProvider(
+    {
+      name: "PermitStack",
+      async search() {
+        return emptyResult();
+      },
+      async getPermit() {
+        return null;
+      },
+    },
+    [extra(rows)],
+  ).search({ mode: "address", q: "605 South Central Avenue", city: "Bartow", state: "FL", zip: "33830", county: "Polk" });
+  const dropped = await search([winter, east]);
+  assert.deepEqual(dropped.permits, []);
+  const kept = await search([winter, east, county]);
+  assert.deepEqual(kept.permits.map((row) => row.permitNumber), ["COUNTY-1"]);
+  const lines = permitLocationLines({ ...kept.permits[0], city: shownPermitCity("Bartow", kept.permits[0]) });
+  assert.match(lines.join("\n"), /Bartow/);
+  assert.equal(lines.some((line) => /winter haven/i.test(line)), false);
 });
 
 test("141 Browning Circle Southeast searches the street without the quadrant and with it in front", async () => {

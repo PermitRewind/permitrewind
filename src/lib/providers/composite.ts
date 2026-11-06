@@ -1,6 +1,6 @@
 import "server-only";
 import type { PermitProvider } from "./types";
-import { cityPreference, hardCity, placeKeeps, selectPermitsByCity } from "../address";
+import { cityPreference, hardCity, parseAddressQuery, permitAddressMatches, placeKeeps, selectPermitsByCity } from "../address";
 import { Permit, SearchQuery, SearchResult } from "../types";
 
 const norm = (n?: string | null) => (n ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
@@ -20,22 +20,28 @@ function applyFilters(p: Permit, q: SearchQuery, city = true): boolean {
   const d = p.dateIssued ?? p.dateFiled;
   if (q.dateFrom && (!d || d < q.dateFrom)) return false;
   if (q.dateTo && (!d || d > q.dateTo)) return false;
-  if (city && q.city && p.city && !supplementalCityKeeps(q, p)) return false;
+  if (!addressKeeps(p, q)) return false;
+  if (city && q.city && !supplementalCityKeeps(q, p)) return false;
   if (q.status && !(p.status ?? "").toLowerCase().replace(/[\s-]+/g, "_").includes(q.status.toLowerCase())) return false;
   if (q.category && !(p.category ?? "").toUpperCase().replace(/[\s/-]+/g, "_").includes(q.category.toUpperCase().replace("NEW_CONSTRUCTION", "NEW"))) return false;
   return true;
 }
 
-/** Permitting cities stay exact. An unofficial place keeps the same county or ZIP. */
+/** Same house number and street. A different quadrant, or a bare street in another permitting city, is not this house. */
+function addressKeeps(p: Permit, q: SearchQuery): boolean {
+  if (q.mode !== "address" || !p.address?.trim()) return true;
+  const parsed = parseAddressQuery(q.q);
+  if (!parsed.streetName) return true;
+  return permitAddressMatches(parsed, p, q.city);
+}
+
+/** A permitting city drops other permitting cities. An unofficial place keeps the same county or ZIP. */
 function supplementalCityKeeps(q: SearchQuery, p: Permit): boolean {
   const wanted = q.city?.trim() ?? "";
-  const city = p.city?.trim() ?? "";
-  if (!wanted || !city) return true;
-  if (city.toLowerCase() === wanted.toLowerCase()) return true;
+  if (!wanted || q.broaden) return true;
   const resolved = hardCity(wanted);
-  if (resolved && city.toLowerCase() === resolved.toLowerCase()) return true;
-  if (resolved) return false;
-  return placeKeeps(p, q);
+  if (resolved) return cityPreference(resolved, p) < 2;
+  return !p.city?.trim() || placeKeeps(p, q);
 }
 
 /**

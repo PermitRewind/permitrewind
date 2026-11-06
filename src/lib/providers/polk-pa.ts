@@ -5,6 +5,7 @@ import { gunzipSync } from "zlib";
 import type { PermitProvider } from "./types";
 import { Permit, SearchQuery, SearchResult } from "../types";
 import { parseAddress } from "./polk-accela";
+import { parseAddressQuery, permitAddressMatches } from "../address";
 import { streetNameForms, streetNamesMatch } from "../address-normalize";
 import { shouldMergePolkSources } from "../jurisdictions";
 
@@ -79,6 +80,7 @@ export class PolkPAProvider implements PermitProvider {
       const p = q.replace(/[^0-9]/g, "");
       if (p.length >= 2) recs = (await loadShard(`parcel-${p.slice(-2)}`)).filter((r) => r[9] === p);
     } else if (query.mode === "address") {
+      const parsed = parseAddressQuery(q);
       const { number, street } = parseAddress(q);
       const key = street.replace(/[^A-Z0-9]/g, "").slice(0, 2).padEnd(2, "_");
       if (street) {
@@ -89,6 +91,9 @@ export class PolkPAProvider implements PermitProvider {
           return sameStreet && (!number || r[10] === number);
         });
       }
+      const matched = recs.map(toPermit).filter((permit) => permitAddressMatches(parsed, permit, query.city));
+      const permits = matched.slice(0, 200);
+      return { permits, total: matched.length, page: 1, perPage: permits.length, notices: [] };
     } else {
       return { permits: [], total: 0, page: 1, perPage: 0, notices: [] };
     }
