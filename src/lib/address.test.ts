@@ -9,6 +9,8 @@ import { isAddressSearchEnabled, reduceComboboxKey } from "./address-combobox";
 import { abbreviateAddress, ADDRESS_SUGGEST_DEBOUNCE_MS, ADDRESS_SUGGEST_LIMIT, ADDRESS_SUGGEST_MIN_CHARS, addressQueryVariants, correctFuzzyCity, expandAddress, highlightAddressLabel, intendedCity, stemStreetTokens, stemTrailingS, streetNameForms, streetNamesMatch } from "./address-normalize";
 import { evaluateAddressSubmission, signAddressSelection } from "./address-selection";
 import { FLORIDA_VIEWBOX, nominatimQueryPlan, rankAddressSuggestions, resetAddressSuggestState, suggestFloridaAddresses, suggestionFromNominatim, suggestionQueryPlan } from "./address-suggest";
+import { permitLocationLines, resultsDisplayCity, resultsPlaceLabel } from "./format";
+import { mailingCityFromZippopotam } from "./zip-locality";
 
 test("parses 3533 Sam Allen Oaks Cir Plant City and suffix variants", () => {
   for (const q of ["3533 Sam Allen Oaks Cir Plant City", "3533 Sam Allen Oaks Circle, Plant City, FL 33563", "3533 Sam Allen Oaks CR Plant City"]) {
@@ -570,6 +572,164 @@ test("an unofficial place name does not hard-filter a different permitting city"
     { city: "Bartow", county: "Polk" },
   );
   assert.deepEqual(bartowOnly.map((row) => row.city), ["Bartow"]);
+});
+
+test("a ZIP with no geocoder locality is labeled with that ZIP's mailing city", { concurrency: false }, async () => {
+  assert.equal(mailingCityFromZippopotam({ places: [{ "place name": "Lakeland", "state abbreviation": "FL" }] }), "Lakeland");
+  assert.equal(mailingCityFromZippopotam({ places: [{ "place name": "Plant City", "state abbreviation": "FL" }] }), "Plant City");
+  assert.equal(
+    mailingCityFromZippopotam({
+      places: [
+        { "place name": "Lakeland", "state abbreviation": "FL" },
+        { "place name": "Highland City", "state abbreviation": "FL" },
+      ],
+    }),
+    "Lakeland",
+  );
+  assert.equal(
+    mailingCityFromZippopotam({
+      places: [
+        { "place name": "Atlanta", "state abbreviation": "GA" },
+        { "place name": "Lakeland", "state abbreviation": "FL" },
+      ],
+    }),
+    "Lakeland",
+  );
+  assert.equal(mailingCityFromZippopotam({ places: [{ "place name": "Atlanta", "state abbreviation": "GA" }] }), null);
+  assert.equal(mailingCityFromZippopotam(null), null);
+
+  const whitedove = {
+    address: {
+      house_number: "3806",
+      road: "Whitedove Drive",
+      county: "Polk County",
+      state: "Florida",
+      postcode: "33812",
+    },
+  };
+  const highland = {
+    address: {
+      house_number: "3938",
+      road: "Whitedove Drive",
+      village: "Highland City",
+      county: "Polk County",
+      state: "Florida",
+      postcode: "33812",
+    },
+  };
+  const oak = {
+    address: {
+      house_number: "10",
+      road: "Oak Street",
+      county: "Hillsborough County",
+      state: "Florida",
+      postcode: "33563",
+    },
+  };
+  const original = globalThis.fetch;
+  let zipCalls = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url);
+    if (url.hostname === "api.zippopotam.us") {
+      zipCalls += 1;
+      const zip = url.pathname.split("/").pop();
+      const city = zip === "33812" ? "Lakeland" : zip === "33563" ? "Plant City" : null;
+      if (!city) return new Response("no", { status: 404 });
+      return new Response(JSON.stringify({ places: [{ "place name": city, "state abbreviation": "FL" }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    const q = url.searchParams.get("q") ?? "";
+    const body = /3806/.test(q) ? [whitedove] : /3938/.test(q) ? [highland] : /oak street/i.test(q) ? [oak] : [];
+    return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    const state = { lastAt: 0, cache: new Map() };
+    for (const typed of ["3806 Whitedove Drive", "3806 White Dove Drive", "3806 WhiteDove Dr"]) {
+      const result = await suggestFloridaAddresses(typed, { minIntervalMs: 0, state: { lastAt: 0, cache: new Map() } });
+      assert.equal(result.status, "ok");
+      assert.equal(result.suggestions.length, 1);
+      const suggestion = result.suggestions[0];
+      assert.equal(suggestion.city, "Lakeland");
+      assert.equal(suggestion.zip, "33812");
+      assert.equal(suggestion.county, "Polk");
+      assert.equal(suggestion.label, "3806 Whitedove Drive, Lakeland, FL 33812");
+      assert.equal(suggestion.label.includes(", FL 33812") && suggestion.label.includes("Lakeland"), true);
+      assert.equal(evaluateAddressSubmission(suggestion.street, suggestion.token).ok, true);
+    }
+    const again = await suggestFloridaAddresses("3806 Whitedove Drive", { minIntervalMs: 0, state });
+    const zipAfterFirst = zipCalls;
+    await suggestFloridaAddresses("3806 Whitedove Drive", { minIntervalMs: 0, state });
+    assert.equal(again.suggestions[0].city, "Lakeland");
+    assert.equal(zipCalls, zipAfterFirst);
+
+    const rows = [
+      { address: "3806 WHITEDOVE DR", city: "LAKELAND" },
+      { address: "3806 WHITE DOVE DRIVE", city: "LAKELAND" },
+    ];
+    for (const typed of ["3806 Whitedove Drive", "3806 White Dove Drive", "3806 WhiteDove Dr"]) {
+      const parsed = parseAddressQuery(typed);
+      assert.equal(rows.every((row) => permitAddressMatches(parsed, row)), true);
+      assert.equal(permitAddressMatches(parsed, { address: "3806 WHITE DOVER DR", city: "LAKELAND" }), false);
+    }
+
+    const beforeHighland = zipCalls;
+    const keptPlace = await suggestFloridaAddresses("3938 Whitedove Drive", { minIntervalMs: 0, state: { lastAt: 0, cache: new Map() } });
+    assert.equal(keptPlace.suggestions[0].city, "Highland City");
+    assert.match(keptPlace.suggestions[0].label ?? "", /Highland City/);
+    assert.equal(zipCalls, beforeHighland);
+    const kept = selectPermitsByCity(
+      [
+        { city: "Lakeland", jurisdiction: "Polk County", zip: "33812", county: "Polk" },
+        { city: "Lakeland", jurisdiction: "City of Lakeland", zip: "33812", county: "Polk" },
+        { city: "Tampa", jurisdiction: "Hillsborough County", zip: "33647", county: "Hillsborough" },
+      ],
+      { city: keptPlace.suggestions[0].city, zip: "33812", county: "Polk" },
+    );
+    assert.equal(kept.length, 2);
+    assert.ok(kept.every((row) => row.city === "Lakeland"));
+
+    const otherZip = await suggestFloridaAddresses("10 Oak Street", { minIntervalMs: 0, state: { lastAt: 0, cache: new Map() } });
+    assert.equal(otherZip.suggestions[0].city, "Plant City");
+    assert.equal(otherZip.suggestions[0].label, "10 Oak Street, Plant City, FL 33563");
+  } finally {
+    globalThis.fetch = original;
+    resetAddressSuggestState();
+  }
+
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url);
+    if (url.hostname === "api.zippopotam.us") throw new Error("zip lookup down");
+    return new Response(JSON.stringify([whitedove]), { status: 200, headers: { "Content-Type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    const result = await suggestFloridaAddresses("3806 Whitedove Drive", { minIntervalMs: 0, state: { lastAt: 0, cache: new Map() } });
+    assert.equal(result.status, "ok");
+    assert.equal(result.suggestions[0].street, "3806 Whitedove Drive");
+    assert.equal(result.suggestions[0].city, null);
+  } finally {
+    globalThis.fetch = original;
+    resetAddressSuggestState();
+  }
+
+  assert.equal(resultsDisplayCity("", [{ city: "LAKELAND" }, { city: "Lakeland" }]), "Lakeland");
+  assert.equal(resultsDisplayCity("Bartow", [{ city: "Lakeland" }]), "Bartow");
+  assert.equal(resultsDisplayCity("", [{ city: "Lakeland" }, { city: "Tampa" }]), null);
+  assert.match(resultsPlaceLabel({ q: "3806 Whitedove Drive", city: "" }, [{ city: "LAKELAND" }, { city: "Lakeland" }]), /3806 Whitedove Drive, Lakeland/);
+  assert.equal(resultsPlaceLabel({ q: "100 Main St", city: "" }, [{ city: "Lakeland" }, { city: "Tampa" }]), "100 Main St");
+  const lines = permitLocationLines({
+    address: "3806 WHITEDOVE DR",
+    city: "Lakeland",
+    state: "FL",
+    zip: "33812",
+    county: "Polk",
+  });
+  assert.ok(lines.some((line) => /Lakeland/.test(line)));
+  const page = readFileSync("src/app/search/page.tsx", "utf8");
+  assert.match(page, /resultsPlaceLabel/);
+  assert.match(page, /resultsDisplayCity/);
+  assert.match(page, /permitLocationLines/);
 });
 
 test("address box copy explains abbreviations, near matches, and the Polk boost", () => {

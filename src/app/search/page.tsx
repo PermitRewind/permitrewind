@@ -7,7 +7,7 @@ import { CITY_SUGGESTIONS, COVERAGE_NOTE, DEFAULT_COUNTY, DEFAULT_REGION, PERMIT
 import { ADDRESS_SUGGEST_MIN_CHARS } from "@/lib/address-normalize";
 import { ADDRESS_SELECTION_MESSAGE, evaluateAddressSubmission } from "@/lib/address-selection";
 import { Permit, ProviderError, SearchMode, SearchQuery, SearchResult } from "@/lib/types";
-import { bestDate, finalDate, fmtDate, fmtLabel, permitLocationLines, sourceAttribution, statusColor } from "@/lib/format";
+import { bestDate, finalDate, fmtDate, fmtLabel, permitLocationLines, resultsDisplayCity, resultsPlaceLabel, sourceAttribution, statusColor } from "@/lib/format";
 import { permitLinkTarget } from "@/lib/permit-link";
 
 export const metadata: Metadata = { title: "Search results" };
@@ -57,6 +57,8 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
     otherCount = result.permits.filter(isOther).length;
     if (!showOther) result = { ...result, permits: result.permits.filter((p) => !isOther(p)) };
   }
+  const displayCity = resultsDisplayCity(query.city, result?.permits ?? []);
+  const placeLabel = resultsPlaceLabel({ q: query.q, city: query.city }, result?.permits ?? []);
   const sel = "w-full min-w-0 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900";
   const modeLabel = { address: "Address", parcel: "Parcel", permit: "Permit #" }[mode];
 
@@ -69,7 +71,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
           compact
           suggestOnMount={addressBlocked && query.q.trim().length >= ADDRESS_SUGGEST_MIN_CHARS}
           initialSelection={addressGate?.ok ? { label: query.q.trim(), token: one(sp.sel) } : null}
-          initialCity={query.city ?? ""}
+          initialCity={displayCity ?? ""}
           initialState={query.state || "FL"}
           initialZip={query.zip ?? ""}
           initialCounty={query.county || DEFAULT_COUNTY}
@@ -88,7 +90,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
           {query.unitNumber ? <input type="hidden" name="unit" value={query.unitNumber} /> : null}
           {query.broaden ? <input type="hidden" name="broad" value="1" /> : null}
           <label className="flex flex-col gap-1">City
-            <input name="city" list="fl-cities" defaultValue={query.city} placeholder="All of Florida" className={sel} autoComplete="off" maxLength={60} />
+            <input name="city" list="fl-cities" defaultValue={displayCity ?? ""} placeholder="All of Florida" className={sel} autoComplete="off" maxLength={60} />
             <datalist id="fl-cities">
               {CITY_SUGGESTIONS.map((c) => <option key={c} value={c} />)}
             </datalist></label>
@@ -121,7 +123,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
 
       <div className="print-only mb-4">
         <h1 className="text-xl font-bold">PermitRewind — Permit History Report</h1>
-        <p className="text-sm">{modeLabel}: {query.q}{query.city ? ` · ${query.city}` : ""} · {DEFAULT_REGION.label} · Generated {new Date().toLocaleDateString("en-US")}</p>
+        <p className="text-sm">{modeLabel}: {placeLabel} · {DEFAULT_REGION.label} · Generated {new Date().toLocaleDateString("en-US")}</p>
       </div>
 
       {!query.q.trim() ? (
@@ -136,7 +138,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
         <section className="mt-6">
           <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
             <h1 className="text-lg font-semibold text-neutral-950">
-              {result.permits.length} permit{result.permits.length === 1 ? "" : "s"} for <span className="text-brand-600">&ldquo;{query.q}&rdquo;</span>
+              {result.permits.length} permit{result.permits.length === 1 ? "" : "s"} for <span className="text-brand-600">&ldquo;{placeLabel}&rdquo;</span>
               {result.total != null && result.total > result.permits.length && <span className="text-sm font-normal text-slate-500"> (showing first {result.permits.length} of {result.total})</span>}
             </h1>
             <ResultsActions permits={result.permits} filename={`permits-${query.q.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.csv`} />

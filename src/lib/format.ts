@@ -36,6 +36,40 @@ const SOURCE_LABELS: Record<string, string> = {
   "City of Davenport": "City of Davenport · city only",
 };
 
+function titleCaseShout(city: string): string {
+  if (city !== city.toUpperCase()) return city;
+  return city.toLowerCase().replace(/(^|[\s-])([a-z])/g, (_match, sep: string, letter: string) => sep + letter.toUpperCase());
+}
+
+/**
+ * City to show for a result set. The query city wins. When that field is
+ * blank, a city shared by every permit (ignoring case) is used, so a search
+ * whose geocoder omitted locality still shows one.
+ */
+export function resultsDisplayCity(
+  queryCity: string | null | undefined,
+  permits: { city?: string | null }[],
+): string | null {
+  const typed = queryCity?.trim();
+  if (typed) return typed;
+  const names = permits.map((permit) => permit.city?.trim()).filter((city): city is string => !!city);
+  if (!names.length) return null;
+  const key = names[0].toLowerCase();
+  if (!names.every((city) => city.toLowerCase() === key)) return null;
+  return titleCaseShout(names[0]);
+}
+
+/** Street plus the display city, without repeating a city already in the street line. */
+export function resultsPlaceLabel(
+  query: { q: string; city?: string | null },
+  permits: { city?: string | null }[],
+): string {
+  const city = resultsDisplayCity(query.city, permits);
+  if (!city) return query.q;
+  if (query.q.toLowerCase().includes(city.toLowerCase())) return query.q;
+  return `${query.q}, ${city}`;
+}
+
 /** Stacked place lines. Empty unit fields are omitted rather than shown as blanks. */
 export function permitLocationLines(p: {
   address?: string | null;
