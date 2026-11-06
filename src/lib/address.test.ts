@@ -4,7 +4,7 @@ import test from "node:test";
 import { NextRequest } from "next/server";
 import { GET } from "../app/api/address-suggest/route";
 import { GET as searchGET } from "../app/api/search/route";
-import { addressStreetForms, cityPreference, hardCity, parseAddressQuery, permitAddressMatches, permitAddressQueries, selectPermitsByCity, suffixEquivalents, toPermitStackAddress } from "./address";
+import { addressStreetForms, cityPreference, hardCity, parseAddressQuery, permitAddressMatches, permitAddressQueries, selectPermitsByCity, shownPermitCity, suffixEquivalents, toPermitStackAddress } from "./address";
 import { addedStreetTypeKind, isAddressSearchEnabled, mergeAddressSuggestResponse, reduceComboboxKey } from "./address-combobox";
 import { abbreviateAddress, ADDRESS_SUGGEST_DEBOUNCE_MS, ADDRESS_SUGGEST_LIMIT, ADDRESS_SUGGEST_MIN_CHARS, STREET_TYPE_FALLBACK_CAP, addressQueryVariants, correctFuzzyCity, expandAddress, highlightAddressLabel, intendedCity, stemStreetTokens, stemTrailingS, streetNameForms, streetNamesMatch } from "./address-normalize";
 import { evaluateAddressSubmission, signAddressSelection } from "./address-selection";
@@ -170,6 +170,51 @@ test("a compass quadrant before or after the street searches and matches with or
   assert.equal(toPermitStackAddress(central).address, "605 S Central Ave");
   assert.deepEqual(permitAddressQueries(central), ["605 S Central Ave", "605 Central Ave", "605 South Central Ave"]);
   assert.equal(permitAddressMatches(parseAddressQuery("605 South Central Avenue Bartow"), { address: "605 N CENTRAL AVE", city: "BARTOW" }), false);
+
+  const south = parseAddressQuery("605 South Central Avenue");
+  assert.equal(south.city, null);
+  assert.equal(south.preDirectional, "S");
+  const bareOtherCity = { address: "605 CENTRAL", city: "Winter Haven", jurisdiction: "City of Winter Haven" };
+  const eastOtherCity = { address: "605 E CENTRAL AVE", city: "WINTER HAVEN", jurisdiction: "City of Winter Haven" };
+  const postEast = { address: "605 CENTRAL AVE E", city: "Winter Haven" };
+  assert.equal(permitAddressMatches(south, bareOtherCity, "Bartow"), false);
+  assert.equal(permitAddressMatches(south, eastOtherCity, "Bartow"), false);
+  assert.equal(permitAddressMatches(south, postEast, "Bartow"), false);
+  assert.equal(permitAddressMatches(south, { address: "605 EAST CENTRAL", city: "Winter Haven" }, "Bartow"), false);
+  assert.equal(permitAddressMatches(south, { address: "605 E CENTRAL", city: "Bartow" }, "Bartow"), false);
+  assert.equal(permitAddressMatches(south, { address: "605 N CENTRAL AVE", city: "Bartow" }, "Bartow"), false);
+  assert.equal(permitAddressMatches(south, { address: "605 CENTRAL", city: "Bartow" }, "Bartow"), true);
+  assert.equal(permitAddressMatches(south, { address: "605 S CENTRAL AVE", city: "BARTOW" }, "Bartow"), true);
+  assert.equal(permitAddressMatches(south, { address: "605 CENTRAL", city: null, jurisdiction: "Polk County" }, "Bartow"), true);
+  assert.equal(permitAddressMatches(south, { address: "605 SOUTH CENTRAL AVENUE", city: "WINTER HAVEN" }, "Bartow"), true);
+  const onlyOtherCity = selectPermitsByCity(
+    [{ city: "Winter Haven", jurisdiction: "City of Winter Haven", county: "Polk", zip: "33880" }],
+    { city: "Bartow", county: "Polk", zip: "33830" },
+  );
+  assert.deepEqual(onlyOtherCity, []);
+  const countyRow = { city: null, jurisdiction: "Polk County", county: "Polk", zip: null };
+  const keptCounty = selectPermitsByCity(
+    [countyRow, { city: "Winter Haven", jurisdiction: "City of Winter Haven", county: "Polk", zip: "33880" }],
+    { city: "Bartow", county: "Polk", zip: "33830" },
+  );
+  assert.deepEqual(keptCounty, [countyRow]);
+  assert.equal(shownPermitCity("Bartow", { city: null, jurisdiction: "Polk County" }), "Bartow");
+  assert.equal(shownPermitCity("Bartow", { city: "CENT", jurisdiction: "Polk County" }), "Bartow");
+  const shown = permitLocationLines({
+    address: "605 CENTRAL",
+    city: shownPermitCity("Bartow", { city: null, jurisdiction: "Polk County" }),
+    state: "FL",
+  });
+  assert.match(shown.join("\n"), /Bartow/);
+  assert.equal(shown.some((line) => /winter haven/i.test(line)), false);
+
+  const browningStreet = parseAddressQuery("141 Browning Circle Southeast");
+  assert.equal(browningStreet.city, null);
+  assert.equal(permitAddressMatches(browningStreet, { address: "141 BROWNING CIR", city: "Winter Haven" }, "Winter Haven"), true);
+  assert.equal(permitAddressMatches(browningStreet, { address: "141 SE BROWNING CIR", city: "WINTER HAVEN" }, "Winter Haven"), true);
+  assert.equal(permitAddressMatches(browningStreet, { address: "141 BROWNING CIR SE", city: "Winter Haven" }, "Winter Haven"), true);
+  assert.equal(permitAddressMatches(browningStreet, { address: "141 NE BROWNING CIR", city: "Winter Haven" }, "Winter Haven"), false);
+  assert.equal(permitAddressMatches(browningStreet, { address: "141 BROWNING CIR", city: "Bartow" }, "Winter Haven"), false);
 
   assert.deepEqual(parseAddress("141 Browning Circle Southeast"), { number: "141", street: "BROWNING" });
   assert.deepEqual(parseAddress("141 Browning Circle SE"), { number: "141", street: "BROWNING" });
@@ -836,6 +881,7 @@ test("a ZIP with no geocoder locality is labeled with that ZIP's mailing city", 
   assert.match(page, /resultsPlaceLabel/);
   assert.match(page, /resultsDisplayCity/);
   assert.match(page, /permitLocationLines/);
+  assert.match(page, /shownPermitCity/);
 });
 
 test("address box copy explains abbreviations, near matches, and the Polk boost", () => {

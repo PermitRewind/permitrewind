@@ -123,7 +123,7 @@ export class PermitStackProvider implements PermitProvider {
     const keep = (rows: unknown[]) => {
       const all: Permit[] = rows.map(mapPermit);
       const covered = all.filter((p) => permitInCoverage(region, p));
-      let permits = parsed?.streetName ? covered.filter((p) => permitAddressMatches(parsed, p)) : covered;
+      let permits = parsed?.streetName ? covered.filter((p) => permitAddressMatches(parsed, p, wantedCity)) : covered;
       permits = selectPermitsByCity(permits, { city: wantedCity, zip: query.zip, county: query.county, broaden: query.broaden });
       return { all, covered, permits };
     };
