@@ -6,8 +6,9 @@ import { GET } from "../app/api/address-suggest/route";
 import { GET as searchGET } from "../app/api/search/route";
 import { cityPreference, parseAddressQuery, permitAddressMatches, suffixEquivalents, toPermitStackAddress } from "./address";
 import { isAddressSearchEnabled, reduceComboboxKey } from "./address-combobox";
+import { abbreviateAddress, ADDRESS_SUGGEST_DEBOUNCE_MS, ADDRESS_SUGGEST_LIMIT, ADDRESS_SUGGEST_MIN_CHARS, addressQueryVariants, expandAddress, highlightAddressLabel } from "./address-normalize";
 import { evaluateAddressSubmission, signAddressSelection } from "./address-selection";
-import { nominatimQueryPlan, resetAddressSuggestState, suggestFloridaAddresses, suggestionFromNominatim } from "./address-suggest";
+import { FLORIDA_VIEWBOX, nominatimQueryPlan, rankAddressSuggestions, resetAddressSuggestState, suggestFloridaAddresses, suggestionFromNominatim, suggestionQueryPlan } from "./address-suggest";
 
 test("parses 3533 Sam Allen Oaks Cir Plant City and suffix variants", () => {
   for (const q of ["3533 Sam Allen Oaks Cir Plant City", "3533 Sam Allen Oaks Circle, Plant City, FL 33563", "3533 Sam Allen Oaks CR Plant City"]) {
@@ -103,6 +104,10 @@ test("GET /api/address-suggest returns standardized Florida addresses as JSON", 
     calls += 1;
     const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url);
     assert.equal(url.hostname, "nominatim.openstreetmap.org");
+    assert.equal(url.searchParams.get("countrycodes"), "us");
+    assert.equal(url.searchParams.get("bounded"), "1");
+    assert.equal(url.searchParams.get("viewbox"), FLORIDA_VIEWBOX);
+    assert.equal(url.searchParams.get("limit"), String(ADDRESS_SUGGEST_LIMIT));
     assert.equal(new Headers(init?.headers).get("X-API-Key"), null);
     assert.match(new Headers(init?.headers).get("User-Agent") ?? "", /PermitRewind/);
     return new Response(JSON.stringify([
@@ -305,6 +310,191 @@ test("pasted address is rejected before PermitStack and a signed selection is ac
   } finally {
     globalThis.fetch = original;
   }
+});
+
+test("expandAddress and abbreviateAddress cover directionals and street types both ways", () => {
+  assert.equal(expandAddress("123 NE Main St"), "123 northeast main street");
+  assert.equal(expandAddress("123 N.E. Main St."), "123 northeast main street");
+  assert.equal(expandAddress("123 NW 1st Ave"), "123 northwest 1st avenue");
+  assert.equal(expandAddress("123 SE 2nd Blvd"), "123 southeast 2nd boulevard");
+  assert.equal(expandAddress("123 SW 3rd Dr"), "123 southwest 3rd drive");
+  assert.equal(expandAddress("10 N Main St"), "10 north main street");
+  assert.equal(expandAddress("10 S Main Rd"), "10 south main road");
+  assert.equal(expandAddress("10 E Main Ln"), "10 east main lane");
+  assert.equal(expandAddress("10 W Main Ct"), "10 west main court");
+  assert.equal(expandAddress("8 Oak Pl"), "8 oak place");
+  assert.equal(expandAddress("8 Oak Cir"), "8 oak circle");
+  assert.equal(expandAddress("8 Oak Hwy"), "8 oak highway");
+  assert.equal(expandAddress("8 Oak Pkwy"), "8 oak parkway");
+  assert.equal(expandAddress("8 Oak Ter"), "8 oak terrace");
+  assert.equal(expandAddress("10 Av"), "10 avenue");
+  assert.equal(expandAddress("10 Ave"), "10 avenue");
+  assert.equal(expandAddress("10 Avenue"), "10 avenue");
+  assert.equal(abbreviateAddress("123 Northeast Main Street"), "123 ne main st");
+  assert.equal(abbreviateAddress("10 Avenue"), "10 ave");
+  assert.equal(abbreviateAddress("605 South Central Avenue"), "605 s central ave");
+  assert.equal(expandAddress("123 St Joseph St"), "123 st joseph street");
+  assert.equal(expandAddress("100 Central Ave, St. Petersburg"), "100 central avenue, st. petersburg");
+  assert.equal(expandAddress("100 Central Ave, St Petersburg"), "100 central avenue, st petersburg");
+  assert.equal(expandAddress("100 Central Ave, Port St. Lucie"), "100 central avenue, port st. lucie");
+  const variants = addressQueryVariants("123 NE Main St, Lakeland");
+  assert.match(variants[0], /northeast/);
+  assert.match(variants[0], /street/);
+  assert.ok(variants.some((variant) => /\bne\b/i.test(variant) && /\bst\b/i.test(variant)));
+  assert.equal(ADDRESS_SUGGEST_MIN_CHARS, 3);
+  assert.ok(ADDRESS_SUGGEST_DEBOUNCE_MS >= 300 && ADDRESS_SUGGEST_DEBOUNCE_MS <= 400);
+  assert.ok(ADDRESS_SUGGEST_LIMIT >= 8 && ADDRESS_SUGGEST_LIMIT <= 10);
+});
+
+test("suggestion labels highlight expanded and abbreviated tokens", () => {
+  const parts = highlightAddressLabel("123 Northeast Main Street, Lakeland, FL 33801", "123 NE Main St");
+  const matched = parts.filter((part) => part.match).map((part) => part.text);
+  assert.ok(matched.includes("123"));
+  assert.ok(matched.includes("Northeast"));
+  assert.ok(matched.includes("Main"));
+  assert.ok(matched.includes("Street"));
+  assert.equal(matched.includes("FL"), false);
+  const avenue = highlightAddressLabel("10 Central Avenue, Bartow, FL 33830", "10 Central Av");
+  assert.ok(avenue.some((part) => part.match && part.text === "Avenue"));
+});
+
+test("Polk suggestions sort ahead of other Florida cities and a typed city stays first", () => {
+  const rows = [
+    { city: "Miami", county: "Miami-Dade" },
+    { city: "Lakeland", county: "Polk" },
+    { city: "Tampa", county: "Hillsborough" },
+    { city: "Bartow", county: "Polk" },
+  ];
+  const ranked = rankAddressSuggestions(rows, "100 Main St");
+  assert.deepEqual(ranked.map((row) => row.city), ["Lakeland", "Bartow", "Miami", "Tampa"]);
+  const cityFirst = rankAddressSuggestions(rows, "100 Main St, Tampa");
+  assert.equal(cityFirst[0].city, "Tampa");
+  assert.ok(cityFirst.some((row) => row.city === "Miami"));
+  assert.ok(cityFirst.findIndex((row) => row.city === "Lakeland") < cityFirst.findIndex((row) => row.city === "Miami"));
+  assert.equal(rankAddressSuggestions([{ city: "Highland City", county: "Polk" }, { city: "Orlando", county: "Orange" }], "9 Feather Dr")[0].city, "Highland City");
+});
+
+test("abbreviated input searches the expanded street and the reverse", { concurrency: false }, async () => {
+  const original = globalThis.fetch;
+  const queries: string[] = [];
+  const lakeland = {
+    address: {
+      house_number: "123",
+      road: "Northeast Main Street",
+      city: "Lakeland",
+      county: "Polk County",
+      state: "Florida",
+      postcode: "33801",
+    },
+  };
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url);
+    const q = url.searchParams.get("q") ?? "";
+    queries.push(q);
+    assert.equal(url.searchParams.get("viewbox"), FLORIDA_VIEWBOX);
+    assert.equal(url.searchParams.get("bounded"), "1");
+    const expanded = /\bnortheast\b/i.test(q) && /\bstreet\b/i.test(q);
+    const body = expanded ? [lakeland] : [];
+    return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    const plan = suggestionQueryPlan("123 NE Main St, Lakeland");
+    assert.match(plan[0], /northeast/i);
+    assert.match(plan[0], /street/i);
+    assert.ok(plan.some((q) => /\bne\b/i.test(q) && /\bst\b/i.test(q)));
+    const result = await suggestFloridaAddresses("123 NE Main St, Lakeland", { minIntervalMs: 0, state: { lastAt: 0, cache: new Map() } });
+    assert.equal(result.status, "ok");
+    assert.equal(result.suggestions[0].city, "Lakeland");
+    assert.equal(result.suggestions[0].county, "Polk");
+    assert.match(result.suggestions[0].street, /Northeast Main Street/);
+    assert.equal(evaluateAddressSubmission(result.suggestions[0].street, result.suggestions[0].token).ok, true);
+    assert.ok(queries.some((q) => /\bnortheast\b/i.test(q) && /\bstreet\b/i.test(q)));
+  } finally {
+    globalThis.fetch = original;
+  }
+
+  queries.length = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url);
+    const q = url.searchParams.get("q") ?? "";
+    queries.push(q);
+    const abbreviated = /\bne\b/i.test(q) && /\bst\b/i.test(q) && !/northeast/i.test(q);
+    const body = abbreviated ? [lakeland] : [];
+    return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    const result = await suggestFloridaAddresses("123 Northeast Main Street, Lakeland", { minIntervalMs: 0, state: { lastAt: 0, cache: new Map() } });
+    assert.equal(result.suggestions[0].street, "123 Northeast Main Street");
+    assert.equal(result.suggestions[0].city, "Lakeland");
+    assert.ok(queries.some((q) => /\bnortheast\b/i.test(q)));
+    assert.ok(queries.some((q) => /\bne\b/i.test(q) && !/northeast/i.test(q)));
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("Polk matches rank first and other Florida addresses stay in the list", { concurrency: false }, async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    const hits = [
+      { address: { house_number: "100", road: "Main Street", city: "Miami", county: "Miami-Dade County", state: "Florida", postcode: "33101" } },
+      { address: { house_number: "100", road: "Main Street", city: "Tampa", county: "Hillsborough County", state: "Florida", postcode: "33602" } },
+      { address: { house_number: "100", road: "Main Street", city: "Lakeland", county: "Polk County", state: "Florida", postcode: "33801" } },
+      { address: { house_number: "200", road: "Peachtree Street", city: "Atlanta", county: "Fulton County", state: "Georgia", postcode: "30303" } },
+      ...Array.from({ length: 9 }, (_, index) => ({
+        address: {
+          house_number: String(300 + index),
+          road: "Main Street",
+          city: "Orlando",
+          county: "Orange County",
+          state: "Florida",
+          postcode: "32801",
+        },
+      })),
+      { address: { house_number: "400", road: "Main Street", city: "Bartow", county: "Polk County", state: "Florida", postcode: "33830" } },
+    ];
+    return new Response(JSON.stringify(hits), { status: 200, headers: { "Content-Type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    const result = await suggestFloridaAddresses("100 Main St", { minIntervalMs: 0, state: { lastAt: 0, cache: new Map() } });
+    assert.equal(result.suggestions.length, ADDRESS_SUGGEST_LIMIT);
+    assert.equal(result.suggestions[0].city, "Lakeland");
+    assert.equal(result.suggestions[1].city, "Bartow");
+    assert.equal(result.suggestions[0].county, "Polk");
+    assert.ok(result.suggestions.some((row) => row.city === "Miami"));
+    assert.ok(result.suggestions.some((row) => row.city === "Tampa"));
+    assert.equal(result.suggestions.some((row) => row.city === "Atlanta"), false);
+    assert.equal(result.suggestions.at(-1)?.city === "Bartow", false);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("three character suggest queries reach Nominatim", { concurrency: false }, async () => {
+  const original = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls += 1;
+    return new Response(JSON.stringify([]), { status: 200, headers: { "Content-Type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    const result = await suggestFloridaAddresses("1st", { minIntervalMs: 0, state: { lastAt: 0, cache: new Map() } });
+    assert.equal(calls > 0, true);
+    assert.equal(result.status, "empty");
+    assert.deepEqual(result.suggestions, []);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("address box copy explains abbreviations and the Polk boost", () => {
+  const form = readFileSync("src/components/SearchForm.tsx", "utf8");
+  const input = readFileSync("src/components/AddressSuggestInput.tsx", "utf8");
+  assert.match(form, /123 NE Main St, Lakeland/);
+  assert.match(form, /Northeast/);
+  assert.match(input, /Abbreviations like NE, St, Ave work fine\. Polk County results are prioritized\./);
+  assert.match(input, /ADDRESS_SUGGEST_MIN_CHARS/);
+  assert.match(input, /ADDRESS_SUGGEST_DEBOUNCE_MS/);
 });
 
 test("suggest route source does not read the PermitStack key", () => {

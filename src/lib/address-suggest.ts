@@ -1,6 +1,7 @@
 import { signAddressSelection } from "./address-selection";
 import { parseAddressQuery, splitStreetUnit, streetLineWithoutLocality } from "./address";
-import { trailingKnownCity } from "./jurisdictions";
+import { ADDRESS_SUGGEST_LIMIT, ADDRESS_SUGGEST_MIN_CHARS, addressQueryVariants } from "./address-normalize";
+import { isPolkCity, normalizePlace, trailingKnownCity } from "./jurisdictions";
 
 /**
  * Florida address suggestions. PermitStack has no autocomplete endpoint, so this
@@ -42,8 +43,10 @@ interface SuggestState {
 }
 
 const shared: SuggestState = { lastAt: 0, cache: new Map() };
-const MIN_QUERY = 4;
 const CACHE_LIMIT = 200;
+
+/** Whole state, not a county. left, top, right, bottom. */
+export const FLORIDA_VIEWBOX = "-87.7,31.1,-79.8,24.4";
 
 export function resetAddressSuggestState(): void {
   shared.lastAt = 0;
@@ -123,6 +126,53 @@ export function nominatimQueryPlan(raw: string): string[] {
   return plan;
 }
 
+/**
+ * Expanded form first (Northeast / Street), then the raw input, then the
+ * abbreviated form (NE / St). Each variant also drops a trailing city the way
+ * `nominatimQueryPlan` does. Callers stop once a variant returns houses so a
+ * hit does not spend another Nominatim request.
+ */
+export function suggestionQueryPlan(raw: string): string[] {
+  const seen = new Set<string>();
+  const plan: string[] = [];
+  for (const variant of addressQueryVariants(raw)) {
+    for (const q of nominatimQueryPlan(variant)) {
+      const key = q.toLowerCase().replace(/\s+/g, " ").trim();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      plan.push(q);
+    }
+  }
+  return plan;
+}
+
+export function isPolkSuggestion(suggestion: { city?: string | null; county?: string | null }): boolean {
+  if (suggestion.county && isPolkCity(suggestion.county)) return true;
+  if (suggestion.city && isPolkCity(suggestion.city)) return true;
+  return false;
+}
+
+/**
+ * Typed city first, then Polk County and its cities, then the rest of Florida.
+ * Order inside a group stays as the geocoder returned it.
+ */
+export function rankAddressSuggestions<T extends { city: string | null; county: string | null }>(
+  suggestions: T[],
+  typedQuery: string,
+): T[] {
+  const typedCity = trailingKnownCity(typedQuery);
+  const typedNorm = typedCity ? normalizePlace(typedCity) : "";
+  const score = (suggestion: T) => {
+    if (typedNorm && suggestion.city && normalizePlace(suggestion.city) === typedNorm) return 0;
+    if (isPolkSuggestion(suggestion)) return 1;
+    return 2;
+  };
+  return suggestions
+    .map((suggestion, index) => ({ suggestion, index, score: score(suggestion) }))
+    .sort((a, b) => a.score - b.score || a.index - b.index)
+    .map((row) => row.suggestion);
+}
+
 /** Selectable row for a fully typed street and city when Nominatim has no house. */
 function suggestionFromTyped(raw: string): AddressSuggestion | null {
   const parsed = parseAddressQuery(raw);
@@ -161,7 +211,7 @@ export async function suggestFloridaAddresses(
   const query = raw.trim().slice(0, 120);
   const state = opts?.state ?? shared;
   const key = query.toLowerCase().replace(/\s+/g, " ");
-  if (query.length < MIN_QUERY) return empty(query, "empty");
+  if (query.length < ADDRESS_SUGGEST_MIN_CHARS) return empty(query, "empty");
   const cached = state.cache.get(key);
   if (cached) return { ...cached, query };
 
@@ -178,10 +228,10 @@ export async function suggestFloridaAddresses(
     url.searchParams.set("addressdetails", "1");
     url.searchParams.set("countrycodes", "us");
     url.searchParams.set("layer", "address");
-    url.searchParams.set("limit", "5");
+    url.searchParams.set("limit", String(ADDRESS_SUGGEST_LIMIT));
     url.searchParams.set("dedupe", "1");
-    // Florida bounding box: left, top, right, bottom.
-    url.searchParams.set("viewbox", "-87.7,31.1,-79.8,24.4");
+    // Florida bounding box. bounded keeps other states out; Polk is ranked later, not filtered.
+    url.searchParams.set("viewbox", FLORIDA_VIEWBOX);
     url.searchParams.set("bounded", "1");
     url.searchParams.set("q", q);
     const res = await fetchImpl(url, {
@@ -198,7 +248,7 @@ export async function suggestFloridaAddresses(
   const seen = new Set<string>();
   const suggestions: AddressSuggestion[] = [];
   let unavailable = false;
-  const plan = nominatimQueryPlan(query);
+  const plan = suggestionQueryPlan(query);
   try {
     for (let i = 0; i < plan.length; i++) {
       if (i > 0) {
@@ -224,15 +274,17 @@ export async function suggestFloridaAddresses(
     unavailable = true;
   }
 
-  if (!suggestions.length) {
+  let ranked = rankAddressSuggestions(suggestions, query);
+  if (!ranked.length) {
     const typed = suggestionFromTyped(query);
-    if (typed) suggestions.push(typed);
+    if (typed) ranked = [typed];
   }
-  if (!suggestions.length) return empty(query, unavailable ? "unavailable" : "empty");
+  if (!ranked.length) return empty(query, unavailable ? "unavailable" : "empty");
+  ranked = ranked.slice(0, ADDRESS_SUGGEST_LIMIT);
 
   const result: AddressSuggestResponse = {
     query,
-    suggestions,
+    suggestions: ranked,
     attribution: ADDRESS_SUGGEST_ATTRIBUTION,
     status: "ok",
   };

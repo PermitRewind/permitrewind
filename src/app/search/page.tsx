@@ -4,6 +4,7 @@ import SearchForm from "@/components/SearchForm";
 import ResultsActions from "@/components/ResultsActions";
 import { getProvider } from "@/lib/providers";
 import { CITY_SUGGESTIONS, COVERAGE_NOTE, DEFAULT_COUNTY, DEFAULT_REGION, PERMIT_CATEGORIES, PERMIT_STATUSES } from "@/lib/jurisdictions";
+import { ADDRESS_SUGGEST_MIN_CHARS } from "@/lib/address-normalize";
 import { ADDRESS_SELECTION_MESSAGE, evaluateAddressSubmission } from "@/lib/address-selection";
 import { Permit, ProviderError, SearchMode, SearchQuery, SearchResult } from "@/lib/types";
 import { bestDate, finalDate, fmtDate, fmtLabel, permitLocationLines, sourceAttribution, statusColor } from "@/lib/format";
@@ -66,7 +67,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
           initialMode={mode}
           initialQ={query.q}
           compact
-          suggestOnMount={addressBlocked && query.q.trim().length >= 4}
+          suggestOnMount={addressBlocked && query.q.trim().length >= ADDRESS_SUGGEST_MIN_CHARS}
           initialSelection={addressGate?.ok ? { label: query.q.trim(), token: one(sp.sel) } : null}
           initialCity={query.city ?? ""}
           initialState={query.state || "FL"}
