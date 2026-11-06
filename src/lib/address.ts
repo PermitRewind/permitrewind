@@ -1,4 +1,4 @@
-import { streetNameForms, streetNamesMatch, fuzzyKnownCity } from "./address-normalize";
+import { compassAbbrev, compassFull, compassPairAbbrev, streetNameForms, streetNamesMatch, fuzzyKnownCity } from "./address-normalize";
 import { CITY_SUGGESTIONS, isPermittingCity, isPolkCity, localityFromQuery, normalizePlace, trailingKnownCity } from "./jurisdictions";
 
 /**
@@ -43,6 +43,10 @@ export interface ParsedAddress {
   streetName: string | null;
   /** Normalized suffix token, e.g. "CIR". */
   suffix: string | null;
+  /** Leading compass abbrev (N, SE, …) when a real street word follows it. */
+  preDirectional: string | null;
+  /** Trailing compass abbrev when the map or the record puts the quadrant after the street. */
+  postDirectional: string | null;
   city: string | null;
   zip: string | null;
 }
@@ -90,9 +94,48 @@ function stripUnit(tokens: string[]): string[] {
   return idx > 0 ? tokens.slice(0, idx) : tokens;
 }
 
+function letters(token: string): string {
+  return token.toUpperCase().replace(/[^A-Z]/g, "");
+}
+
+function isSuffixWord(token: string): boolean {
+  const key = letters(token);
+  return key.length > 0 && SUFFIX_TO_GROUP.has(key);
+}
+
+/** A word that is neither a quadrant nor a suffix, so the directional is not the street name. */
+function hasStreetCore(words: string[]): boolean {
+  return words.some((word) => letters(word) && !compassAbbrev(word) && !isSuffixWord(word));
+}
+
+/** Any non-suffix word, including a compass word used as the street name ("North St"). */
+function hasNameWord(words: string[]): boolean {
+  return words.some((word) => letters(word) && !isSuffixWord(word));
+}
+
+function peelEdge(words: string[], edge: "start" | "end", keep: (rest: string[]) => boolean): { words: string[]; dir: string | null } {
+  if (words.length < 2) return { words, dir: null };
+  if (edge === "end") {
+    const pair = compassPairAbbrev(words[words.length - 2], words[words.length - 1]);
+    const pairRest = words.slice(0, -2);
+    if (pair && keep(pairRest)) return { words: pairRest, dir: pair };
+  } else {
+    const pair = compassPairAbbrev(words[0], words[1]);
+    const pairRest = words.slice(2);
+    if (pair && keep(pairRest)) return { words: pairRest, dir: pair };
+  }
+  const token = edge === "end" ? words[words.length - 1] : words[0];
+  const dir = compassAbbrev(token);
+  const rest = edge === "end" ? words.slice(0, -1) : words.slice(1);
+  if (dir && keep(rest)) return { words: rest, dir };
+  return { words, dir: null };
+}
+
 /**
  * Parse a typed Florida address, including ones with no commas.
  * "3533 Sam Allen Oaks Cir Plant City" → number 3533, name Sam Allen Oaks, suffix CIR, city Plant City.
+ * A compass word after the suffix ("Circle Southeast") or before the name ("SE Browning")
+ * is a quadrant, not part of the street name. "North St" keeps North as the name.
  */
 export function parseAddressQuery(raw: string): ParsedAddress {
   const trimmed = raw.trim();
@@ -105,16 +148,32 @@ export function parseAddressQuery(raw: string): ParsedAddress {
     number = rest[0];
     rest = rest.slice(1);
   }
+  let preDirectional: string | null = null;
+  let postDirectional: string | null = null;
+  const take = (edge: "start" | "end", keep: (rest: string[]) => boolean) => {
+    const peeled = peelEdge(rest, edge, keep);
+    if (!peeled.dir) return;
+    rest = peeled.words;
+    if (edge === "start") preDirectional ??= peeled.dir;
+    else postDirectional ??= peeled.dir;
+  };
+  // Quadrant after the suffix ("Circle Southeast", "Cir SE", "Circle South East").
+  take("end", hasNameWord);
+  // Quadrant before the name ("SE Browning", "South Central", "South East Browning").
+  take("start", hasStreetCore);
   let suffix: string | null = null;
   if (rest.length) {
-    const last = rest[rest.length - 1].toUpperCase().replace(/[^A-Z]/g, "");
+    const last = letters(rest[rest.length - 1]);
     if (last && SUFFIX_TO_GROUP.has(last) && rest.length > 1) {
       suffix = last;
       rest = rest.slice(0, -1);
     }
   }
+  // Quadrant between the name and the suffix ("Browning SE Circle").
+  take("end", hasNameWord);
+  take("start", hasStreetCore);
   const streetName = rest.join(" ").trim() || null;
-  return { raw: trimmed, number, streetName, suffix, city, zip };
+  return { raw: trimmed, number, streetName, suffix, preDirectional, postDirectional, city, zip };
 }
 
 function norm(s: string): string {
@@ -154,6 +213,7 @@ function suffixInLine(line: string): string | null {
 function prettyToken(token: string): string {
   const upper = token.toUpperCase();
   if (DIR_FULL[upper]) return DIR_FULL[upper];
+  if (compassAbbrev(token) === upper) return upper;
   if (upper.length === 1) return upper;
   return upper.charAt(0) + upper.slice(1).toLowerCase();
 }
@@ -169,21 +229,23 @@ export function streetLineWithoutLocality(raw: string): string {
   return streetRemainder(raw, localityInQuery(raw));
 }
 
+function streetLine(number: string | null, dir: string | null, name: string, suffix: string | null): string {
+  const pretty = name.split(/\s+/).filter(Boolean).map((part) => prettyToken(part)).join(" ");
+  return [number, dir, pretty, suffix].filter(Boolean).join(" ");
+}
+
 /**
  * Address string for PermitStack's partial match.
- * Directions and suffixes are shortened (South → S, Avenue → Ave) because stored
- * rows are usually abbreviated. Cir/Circle/CR stays unsuffixed so all three match.
+ * Directions and suffixes are shortened (South → S, Southeast → SE, Avenue → Ave)
+ * because stored rows are usually abbreviated. A trailing quadrant is left off this
+ * primary line; `permitAddressQueries` also tries it in front of the street.
+ * Cir/Circle/CR stays unsuffixed so all three match.
  * ZIP is returned for display only; sending it as zip_code ANDs away rows that omit it.
  */
 export function toPermitStackAddress(parsed: ParsedAddress): { address: string; city?: string; zip?: string } {
-  const name = parsed.streetName
-    ? tokens(parsed.streetName).map((token) => prettyToken(token)).join(" ")
-    : "";
   const address = !parsed.streetName
     ? parsed.raw.trim()
-    : expandsSuffix(parsed.suffix)
-      ? [parsed.number, name].filter(Boolean).join(" ")
-      : [parsed.number, name, shortSuffix(parsed.suffix)].filter(Boolean).join(" ");
+    : streetLine(parsed.number, parsed.preDirectional, parsed.streetName, expandsSuffix(parsed.suffix) ? null : shortSuffix(parsed.suffix));
   const city = hardCity(parsed.city);
   return {
     address,
@@ -197,18 +259,51 @@ export function addressStreetForms(raw: string): string[] {
   const parsed = parseAddressQuery(raw);
   if (!parsed.streetName) return [raw.trim()];
   const suffix = expandsSuffix(parsed.suffix) ? null : shortSuffix(parsed.suffix);
-  const lines = streetNameForms(parsed.streetName).map((name) => {
-    const pretty = name.split(/\s+/).filter(Boolean).map((part) => prettyToken(part)).join(" ");
-    return [parsed.number, pretty, suffix].filter(Boolean).join(" ");
-  });
+  const lines = streetNameForms(parsed.streetName).map((name) => streetLine(parsed.number, parsed.preDirectional, name, suffix));
   const unique = [...new Set(lines)];
   return unique.length ? unique : [raw.trim()];
 }
 
-/** PermitStack address strings for this parse, including the other compound spelling. */
+function pushQuery(lines: string[], seen: Set<string>, line: string | null | undefined) {
+  const text = line?.replace(/\s+/g, " ").trim();
+  if (!text) return;
+  const key = text.toLowerCase();
+  if (seen.has(key)) return;
+  seen.add(key);
+  lines.push(text);
+}
+
+/**
+ * PermitStack address strings for this parse.
+ * Compound names are queried both ways. A compass quadrant (before the name or
+ * after the suffix, abbreviated or spelled) is also tried off the street and in
+ * front of it, so "Circle Southeast" hits "BROWNING CIR" and "SE BROWNING CIR".
+ */
 export function permitAddressQueries(parsed: ParsedAddress): string[] {
-  const primary = toPermitStackAddress(parsed).address;
-  return [...new Set([primary, ...addressStreetForms(parsed.raw)].filter(Boolean))];
+  const seen = new Set<string>();
+  const lines: string[] = [];
+  pushQuery(lines, seen, toPermitStackAddress(parsed).address);
+  for (const line of addressStreetForms(parsed.raw)) pushQuery(lines, seen, line);
+  const dirs = [...new Set([parsed.preDirectional, parsed.postDirectional].filter((dir): dir is string => !!dir))];
+  if (dirs.length && parsed.streetName) {
+    const natural = shortSuffix(parsed.suffix);
+    const policy = expandsSuffix(parsed.suffix) ? null : natural;
+    for (const name of streetNameForms(parsed.streetName)) {
+      pushQuery(lines, seen, streetLine(parsed.number, null, name, policy));
+      if (natural && natural !== policy) pushQuery(lines, seen, streetLine(parsed.number, null, name, natural));
+      for (const dir of dirs) {
+        const full = compassFull(dir);
+        const withSuffix = natural ?? policy;
+        pushQuery(lines, seen, streetLine(parsed.number, dir, name, withSuffix));
+        if (full && full.toLowerCase() !== dir.toLowerCase()) pushQuery(lines, seen, streetLine(parsed.number, full, name, withSuffix));
+        if ((natural ?? null) !== policy) {
+          pushQuery(lines, seen, streetLine(parsed.number, dir, name, policy));
+          if (full) pushQuery(lines, seen, streetLine(parsed.number, full, name, policy));
+        }
+      }
+    }
+  }
+  return lines;
 }
 
 /**
@@ -218,15 +313,40 @@ export function permitAddressQueries(parsed: ParsedAddress): string[] {
 export function loosePermitStackAddress(parsed: ParsedAddress): string | null {
   if (!parsed.streetName) return null;
   const parts = tokens(parsed.streetName);
-  const hadDirection = parts.some((part) => DIR_FULL[part] || ["N", "S", "E", "W"].includes(part));
+  const hadDirection = !!(parsed.preDirectional || parsed.postDirectional) || parts.some((part) => compassAbbrev(part));
   if (!hadDirection) return null;
-  const core = parts.filter((part) => !DIR_FULL[part] && !["N", "S", "E", "W"].includes(part)).map((part) => prettyToken(part));
+  const core = parts.filter((part) => !compassAbbrev(part)).map((part) => prettyToken(part));
   return core.length ? core.join(" ") : null;
 }
 
 /**
+ * Compass words at either end of a permit line. A compass word between other
+ * name words stays part of the name.
+ */
+function rowQuadrants(parts: string[]): string[] {
+  const body = parts[0] && /^\d/.test(parts[0]) ? parts.slice(1) : parts.slice();
+  const dirs: string[] = [];
+  while (body.length) {
+    const dir = compassAbbrev(body[0]);
+    if (!dir) break;
+    dirs.push(dir);
+    body.shift();
+  }
+  while (body.length) {
+    const last = body[body.length - 1];
+    const dir = compassAbbrev(last);
+    if (!dir && !isSuffixWord(last)) break;
+    if (dir) dirs.push(dir);
+    body.pop();
+  }
+  return dirs;
+}
+
+/**
  * Same house and street name. Equivalent suffixes (Dr/Drive, Cir/Circle/CR) match.
- * A direction before or after the suffix still matches. A different suffix family does not.
+ * A direction before or after the suffix still matches, including when the query
+ * named that quadrant and the row omitted it. A different quadrant does not.
+ * A different suffix family does not.
  */
 export function permitAddressMatches(
   parsed: ParsedAddress,
@@ -241,6 +361,8 @@ export function permitAddressMatches(
   const nameTokens = canonDirections(tokens(parsed.streetName));
   const resolvedCity = hardCity(parsed.city);
   if (!containsSequence(canonDirections(rowTokens), nameTokens) && !streetNamesMatch(line, nameTokens.join(" "))) return false;
+  const expected = [...new Set([parsed.preDirectional, parsed.postDirectional].filter((dir): dir is string => !!dir))];
+  if (expected.length && rowQuadrants(rowTokens).some((dir) => !expected.includes(dir))) return false;
   if (parsed.suffix) {
     const rowSuffix = suffixInLine(line);
     if (rowSuffix && !suffixEquivalents(parsed.suffix).includes(rowSuffix)) return false;
@@ -249,10 +371,19 @@ export function permitAddressMatches(
   return true;
 }
 
-const DIR_FULL: Record<string, string> = { NORTH: "N", SOUTH: "S", EAST: "E", WEST: "W" };
+const DIR_FULL: Record<string, string> = {
+  NORTH: "N",
+  SOUTH: "S",
+  EAST: "E",
+  WEST: "W",
+  NORTHEAST: "NE",
+  NORTHWEST: "NW",
+  SOUTHEAST: "SE",
+  SOUTHWEST: "SW",
+};
 
 function canonDirections(parts: string[]): string[] {
-  return parts.map((part) => DIR_FULL[part] ?? part);
+  return parts.map((part) => DIR_FULL[part] ?? compassAbbrev(part) ?? part);
 }
 
 const KNOWN_CITY_NORMS = [...CITY_SUGGESTIONS]

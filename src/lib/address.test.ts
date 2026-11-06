@@ -4,12 +4,13 @@ import test from "node:test";
 import { NextRequest } from "next/server";
 import { GET } from "../app/api/address-suggest/route";
 import { GET as searchGET } from "../app/api/search/route";
-import { addressStreetForms, cityPreference, hardCity, parseAddressQuery, permitAddressMatches, selectPermitsByCity, suffixEquivalents, toPermitStackAddress } from "./address";
+import { addressStreetForms, cityPreference, hardCity, parseAddressQuery, permitAddressMatches, permitAddressQueries, selectPermitsByCity, suffixEquivalents, toPermitStackAddress } from "./address";
 import { isAddressSearchEnabled, reduceComboboxKey } from "./address-combobox";
 import { abbreviateAddress, ADDRESS_SUGGEST_DEBOUNCE_MS, ADDRESS_SUGGEST_LIMIT, ADDRESS_SUGGEST_MIN_CHARS, addressQueryVariants, correctFuzzyCity, expandAddress, highlightAddressLabel, intendedCity, stemStreetTokens, stemTrailingS, streetNameForms, streetNamesMatch } from "./address-normalize";
 import { evaluateAddressSubmission, signAddressSelection } from "./address-selection";
 import { FLORIDA_VIEWBOX, nominatimQueryPlan, rankAddressSuggestions, resetAddressSuggestState, suggestFloridaAddresses, suggestionFromNominatim, suggestionQueryPlan } from "./address-suggest";
 import { permitLocationLines, resultsDisplayCity, resultsPlaceLabel } from "./format";
+import { parseAddress } from "./providers/polk-accela";
 import { mailingCityFromZippopotam } from "./zip-locality";
 
 test("parses 3533 Sam Allen Oaks Cir Plant City and suffix variants", () => {
@@ -74,6 +75,111 @@ test("suffix fallback keeps the four Sam Allen Oaks rows and drops Boulevard", (
   assert.equal(keep.every((row) => permitAddressMatches(parsed, row)), true);
   assert.equal(permitAddressMatches(parsed, { address: "3533 SAM ALLEN OAKS BLVD", city: "PLANT CITY" }), false);
   assert.equal(permitAddressMatches(parsed, { address: "3534 SAM ALLEN OAKS CIR", city: "PLANT CITY" }), false);
+});
+
+test("a compass quadrant before or after the street searches and matches with or without it", () => {
+  const selected = parseAddressQuery("141 Browning Circle Southeast, Winter Haven, FL 33884");
+  assert.equal(selected.number, "141");
+  assert.equal(selected.streetName, "Browning");
+  assert.equal(selected.suffix, "CIRCLE");
+  assert.equal(selected.preDirectional, null);
+  assert.equal(selected.postDirectional, "SE");
+  assert.equal(selected.city, "Winter Haven");
+  assert.equal(selected.zip, "33884");
+  const plain = parseAddressQuery("141 Browning Cir, Winter Haven, FL 33884");
+  assert.equal(toPermitStackAddress(selected).address, toPermitStackAddress(plain).address);
+  assert.equal(toPermitStackAddress(selected).address, "141 Browning");
+  assert.equal(toPermitStackAddress(selected).city, "Winter Haven");
+
+  const quadrants = [
+    "141 Browning Circle Southeast",
+    "141 Browning Circle SE",
+    "141 Browning Cir Southeast",
+    "141 Browning Cir SE",
+    "141 SE Browning Cir",
+    "141 Southeast Browning Circle",
+    "141 South East Browning Cir",
+    "141 Browning SE Circle",
+  ];
+  const keep = [
+    { address: "141 BROWNING CIR", city: "Winter Haven" },
+    { address: "141 SE BROWNING CIR", city: "WINTER HAVEN" },
+    { address: "141 BROWNING CIR SE", city: "Winter Haven" },
+    { address: "141 SOUTHEAST BROWNING CIRCLE", city: "Winter Haven" },
+  ];
+  for (const q of quadrants) {
+    const parsed = parseAddressQuery(q);
+    assert.equal(parsed.number, "141");
+    assert.equal(parsed.streetName, "Browning");
+    assert.ok(parsed.suffix && suffixEquivalents(parsed.suffix).includes("CIR"));
+    assert.equal(parsed.preDirectional === "SE" || parsed.postDirectional === "SE", true);
+    const plan = permitAddressQueries(parsed);
+    assert.equal(plan[0], toPermitStackAddress(parsed).address);
+    assert.ok(plan.includes("141 Browning"));
+    assert.ok(plan.includes("141 Browning Cir"));
+    assert.ok(plan.includes("141 SE Browning Cir"));
+    assert.ok(plan.includes("141 Southeast Browning Cir"));
+    assert.equal(plan.some((line) => /circle southeast/i.test(line)), false);
+    assert.equal(keep.every((row) => permitAddressMatches(parsed, row)), true);
+    assert.equal(permitAddressMatches(parsed, { address: "141 NE BROWNING CIR", city: "Winter Haven" }), false);
+    assert.equal(permitAddressMatches(parsed, { address: "141 BROWNING DR", city: "Winter Haven" }), false);
+    assert.equal(permitAddressMatches(parsed, { address: "142 BROWNING CIR", city: "Winter Haven" }), false);
+  }
+
+  const northwest = parseAddressQuery("500 Oak Avenue Northwest");
+  assert.equal(northwest.streetName, "Oak");
+  assert.equal(northwest.suffix, "AVENUE");
+  assert.equal(northwest.postDirectional, "NW");
+  assert.equal(northwest.preDirectional, null);
+  const oak = permitAddressQueries(northwest);
+  assert.equal(oak[0], "500 Oak Ave");
+  assert.ok(oak.includes("500 NW Oak Ave"));
+  assert.ok(oak.includes("500 Northwest Oak Ave"));
+  assert.equal(permitAddressMatches(northwest, { address: "500 OAK AVE" }), true);
+  assert.equal(permitAddressMatches(northwest, { address: "500 NW OAK AVENUE" }), true);
+  assert.equal(permitAddressMatches(northwest, { address: "500 N OAK AVE" }), false);
+
+  const east = parseAddressQuery("10 East Main Street W");
+  assert.equal(east.streetName, "Main");
+  assert.equal(east.preDirectional, "E");
+  assert.equal(east.postDirectional, "W");
+  assert.equal(toPermitStackAddress(east).address, "10 E Main St");
+  const main = permitAddressQueries(east);
+  assert.ok(main.includes("10 Main St"));
+  assert.ok(main.includes("10 E Main St"));
+  assert.ok(main.includes("10 East Main St"));
+  assert.ok(main.includes("10 W Main St"));
+  assert.ok(main.includes("10 West Main St"));
+  assert.equal(permitAddressMatches(east, { address: "10 MAIN ST" }), true);
+  assert.equal(permitAddressMatches(east, { address: "10 E MAIN STREET" }), true);
+  assert.equal(permitAddressMatches(east, { address: "10 MAIN ST W" }), true);
+  assert.equal(permitAddressMatches(east, { address: "10 N MAIN ST" }), false);
+
+  const northStreet = parseAddressQuery("100 North St");
+  assert.equal(northStreet.streetName, "North");
+  assert.equal(northStreet.suffix, "ST");
+  assert.equal(northStreet.preDirectional, null);
+  assert.equal(northStreet.postDirectional, null);
+  assert.equal(toPermitStackAddress(northStreet).address, "100 N St");
+  assert.equal(permitAddressQueries(northStreet).some((line) => /\bse\b/i.test(line)), false);
+
+  const central = parseAddressQuery("605 South Central Avenue");
+  assert.equal(central.streetName, "Central");
+  assert.equal(central.preDirectional, "S");
+  assert.equal(central.postDirectional, null);
+  assert.equal(toPermitStackAddress(central).address, "605 S Central Ave");
+  assert.deepEqual(permitAddressQueries(central), ["605 S Central Ave", "605 Central Ave", "605 South Central Ave"]);
+  assert.equal(permitAddressMatches(parseAddressQuery("605 South Central Avenue Bartow"), { address: "605 N CENTRAL AVE", city: "BARTOW" }), false);
+
+  assert.deepEqual(parseAddress("141 Browning Circle Southeast"), { number: "141", street: "BROWNING" });
+  assert.deepEqual(parseAddress("141 Browning Circle SE"), { number: "141", street: "BROWNING" });
+  assert.deepEqual(parseAddress("141 SE Browning Cir"), { number: "141", street: "BROWNING" });
+  assert.deepEqual(parseAddress("141 Southeast Browning Circle"), { number: "141", street: "BROWNING" });
+  assert.deepEqual(parseAddress("141 Browning Cir"), { number: "141", street: "BROWNING" });
+  assert.deepEqual(parseAddress("3749 Feather Dr, Lakeland FL 33812"), { number: "3749", street: "FEATHER" });
+  assert.deepEqual(parseAddress("1832 Buckeye Road"), { number: "1832", street: "BUCKEYE" });
+  assert.deepEqual(parseAddress("605 S Central Ave"), { number: "605", street: "CENTRAL" });
+  assert.deepEqual(parseAddress("19156 N Dove Creek Dr"), { number: "19156", street: "DOVE CREEK" });
 });
 
 test("keyboard selection moves, selects, and leaves typed search alone", () => {
