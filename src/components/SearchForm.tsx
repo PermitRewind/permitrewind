@@ -8,7 +8,7 @@ import { DEFAULT_COUNTY, FLORIDA_COUNTIES } from "@/lib/jurisdictions";
 import type { SearchMode } from "@/lib/types";
 
 const MODES: { id: SearchMode; label: string; placeholder: string }[] = [
-  { id: "address", label: "Address", placeholder: "e.g. 123 NE Main St, Lakeland or Try “Northeast” or “NE”" },
+  { id: "address", label: "Address", placeholder: "e.g. 123 NE Main St, Lakeland or Try “King Ave” or “Kings Avenue”" },
   { id: "parcel", label: "Parcel ID", placeholder: "e.g. 24-28-15-000000-012345" },
   { id: "permit", label: "Permit #", placeholder: "e.g. BT-2026-14923" },
 ];

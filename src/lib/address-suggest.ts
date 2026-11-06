@@ -1,7 +1,7 @@
 import { signAddressSelection } from "./address-selection";
 import { parseAddressQuery, splitStreetUnit, streetLineWithoutLocality } from "./address";
-import { ADDRESS_SUGGEST_LIMIT, ADDRESS_SUGGEST_MIN_CHARS, addressQueryVariants } from "./address-normalize";
-import { isPolkCity, normalizePlace, trailingKnownCity } from "./jurisdictions";
+import { ADDRESS_SUGGEST_LIMIT, ADDRESS_SUGGEST_MIN_CHARS, addressQueryVariants, citiesNear, intendedCity, streetTokenRank } from "./address-normalize";
+import { isPolkCity } from "./jurisdictions";
 
 /**
  * Florida address suggestions. PermitStack has no autocomplete endpoint, so this
@@ -90,7 +90,7 @@ export function suggestionFromNominatim(hit: NominatimHit, typedQuery = ""): Add
   const street = split.street;
   if (!street) return null;
   const nominatimCity = address.city || address.town || address.village || address.hamlet || address.municipality || null;
-  const typedCity = trailingKnownCity(typedQuery);
+  const typedCity = intendedCity(typedQuery);
   // A city the visitor typed wins when Nominatim names a different place (Highland City vs Lakeland, Winter Haven vs Bartow).
   const city = typedCity && nominatimCity && typedCity.toLowerCase() !== nominatimCity.toLowerCase()
     ? typedCity
@@ -128,9 +128,11 @@ export function nominatimQueryPlan(raw: string): string[] {
 
 /**
  * Expanded form first (Northeast / Street), then the raw input, then the
- * abbreviated form (NE / St). Each variant also drops a trailing city the way
- * `nominatimQueryPlan` does. Callers stop once a variant returns houses so a
- * hit does not spend another Nominatim request.
+ * abbreviated form (NE / St), then near-matches (King for Kings, Lakeland for
+ * Lakland). Each variant also drops a trailing city the way `nominatimQueryPlan`
+ * does. A city-qualified hit stops the search. A different city from the
+ * city-stripped fallback does not, while a later variant still names the city
+ * the visitor typed.
  */
 export function suggestionQueryPlan(raw: string): string[] {
   const seen = new Set<string>();
@@ -156,20 +158,20 @@ export function isPolkSuggestion(suggestion: { city?: string | null; county?: st
  * Typed city first, then Polk County and its cities, then the rest of Florida.
  * Order inside a group stays as the geocoder returned it.
  */
-export function rankAddressSuggestions<T extends { city: string | null; county: string | null }>(
+export function rankAddressSuggestions<T extends { city: string | null; county: string | null; street?: string }>(
   suggestions: T[],
   typedQuery: string,
 ): T[] {
-  const typedCity = trailingKnownCity(typedQuery);
-  const typedNorm = typedCity ? normalizePlace(typedCity) : "";
+  const typedCity = intendedCity(typedQuery);
   const score = (suggestion: T) => {
-    if (typedNorm && suggestion.city && normalizePlace(suggestion.city) === typedNorm) return 0;
+    if (typedCity && suggestion.city && citiesNear(typedCity, suggestion.city)) return 0;
     if (isPolkSuggestion(suggestion)) return 1;
     return 2;
   };
+  const streetScore = (suggestion: T) => suggestion.street ? streetTokenRank(typedQuery, suggestion.street) : 0;
   return suggestions
-    .map((suggestion, index) => ({ suggestion, index, score: score(suggestion) }))
-    .sort((a, b) => a.score - b.score || a.index - b.index)
+    .map((suggestion, index) => ({ suggestion, index, score: score(suggestion), street: streetScore(suggestion) }))
+    .sort((a, b) => a.score - b.score || a.street - b.street || a.index - b.index)
     .map((row) => row.suggestion);
 }
 
@@ -189,6 +191,26 @@ function suggestionFromTyped(raw: string): AddressSuggestion | null {
     label, street: split.street, city: parsed.city, state: "FL", zip, county: null,
     unitType: split.unitType, unitNumber: split.unitNumber, token,
   };
+}
+
+function nominatimLocality(hit: NominatimHit): string | null {
+  const address = hit.address;
+  if (!address) return null;
+  return address.city || address.town || address.village || address.hamlet || address.municipality || null;
+}
+
+function queryIncludesCity(q: string, city: string): boolean {
+  const needle = city.toLowerCase().replace(/\./g, "").replace(/\s+/g, " ").trim();
+  if (!needle) return false;
+  return q.toLowerCase().replace(/\./g, "").replace(/\s+/g, " ").includes(needle);
+}
+
+/** Blank locality counts as a match so a house with no city tag can take the typed city. */
+function hitAgrees(hit: NominatimHit, typedCity: string | null): boolean {
+  if (!typedCity) return true;
+  const locality = nominatimLocality(hit);
+  if (!locality) return true;
+  return citiesNear(typedCity, locality);
 }
 
 function remember(cache: Map<string, AddressSuggestResponse>, key: string, value: AddressSuggestResponse) {
@@ -245,8 +267,11 @@ export async function suggestFloridaAddresses(
     return (await res.json()) as NominatimHit[];
   }
 
+  const typedCity = intendedCity(query);
   const seen = new Set<string>();
-  const suggestions: AddressSuggestion[] = [];
+  const tagged: { suggestion: AddressSuggestion; broadWeak: boolean }[] = [];
+  let sawStrong = false;
+  let sawCityQualifiedWeak = false;
   let unavailable = false;
   const plan = suggestionQueryPlan(query);
   try {
@@ -260,21 +285,34 @@ export async function suggestFloridaAddresses(
         unavailable = true;
         continue;
       }
+      const broadened = !!typedCity && !queryIncludesCity(plan[i], typedCity);
+      let batchStrong = false;
+      let batchWeak = false;
       for (const hit of body) {
         const suggestion = suggestionFromNominatim(hit, query);
         if (!suggestion) continue;
         const id = suggestion.label.toLowerCase();
         if (seen.has(id)) continue;
         seen.add(id);
-        suggestions.push(suggestion);
+        const agrees = hitAgrees(hit, typedCity);
+        if (agrees) batchStrong = true;
+        else batchWeak = true;
+        // A city-stripped query can return the same house number on a different
+        // road (1221 Kings Avenue in Jacksonville). Keep looking for the typed city.
+        tagged.push({ suggestion, broadWeak: !agrees && broadened });
       }
-      if (suggestions.length > 0) break;
+      if (batchStrong) sawStrong = true;
+      if (!broadened && batchWeak) sawCityQualifiedWeak = true;
+      if (sawStrong || sawCityQualifiedWeak) break;
+      const laterCity = !!typedCity && plan.slice(i + 1).some((item) => queryIncludesCity(item, typedCity));
+      if (tagged.length && !laterCity) break;
     }
   } catch {
     unavailable = true;
   }
 
-  let ranked = rankAddressSuggestions(suggestions, query);
+  const pool = (sawStrong ? tagged.filter((row) => !row.broadWeak) : tagged).map((row) => row.suggestion);
+  let ranked = rankAddressSuggestions(pool, query);
   if (!ranked.length) {
     const typed = suggestionFromTyped(query);
     if (typed) ranked = [typed];

@@ -157,7 +157,7 @@ export default function AddressSuggestInput({
         </ul>
         )}
       </div>
-      <p id={hintId} className={`mt-1 text-xs ${hintClassName}`}>Abbreviations like NE, St, Ave work fine. Polk County results are prioritized.</p>
+      <p id={hintId} className={`mt-1 text-xs ${hintClassName}`}>Abbreviations and small differences (NE / Northeast, King / Kings) are handled. Polk County results are prioritized.</p>
     </div>
   );
 }

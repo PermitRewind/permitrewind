@@ -6,7 +6,7 @@ import { GET } from "../app/api/address-suggest/route";
 import { GET as searchGET } from "../app/api/search/route";
 import { cityPreference, parseAddressQuery, permitAddressMatches, suffixEquivalents, toPermitStackAddress } from "./address";
 import { isAddressSearchEnabled, reduceComboboxKey } from "./address-combobox";
-import { abbreviateAddress, ADDRESS_SUGGEST_DEBOUNCE_MS, ADDRESS_SUGGEST_LIMIT, ADDRESS_SUGGEST_MIN_CHARS, addressQueryVariants, expandAddress, highlightAddressLabel } from "./address-normalize";
+import { abbreviateAddress, ADDRESS_SUGGEST_DEBOUNCE_MS, ADDRESS_SUGGEST_LIMIT, ADDRESS_SUGGEST_MIN_CHARS, addressQueryVariants, correctFuzzyCity, expandAddress, highlightAddressLabel, intendedCity, stemStreetTokens, stemTrailingS } from "./address-normalize";
 import { evaluateAddressSubmission, signAddressSelection } from "./address-selection";
 import { FLORIDA_VIEWBOX, nominatimQueryPlan, rankAddressSuggestions, resetAddressSuggestState, suggestFloridaAddresses, suggestionFromNominatim, suggestionQueryPlan } from "./address-suggest";
 
@@ -487,14 +487,168 @@ test("three character suggest queries reach Nominatim", { concurrency: false }, 
   }
 });
 
-test("address box copy explains abbreviations and the Polk boost", () => {
+test("address box copy explains abbreviations, near matches, and the Polk boost", () => {
   const form = readFileSync("src/components/SearchForm.tsx", "utf8");
   const input = readFileSync("src/components/AddressSuggestInput.tsx", "utf8");
-  assert.match(form, /123 NE Main St, Lakeland/);
-  assert.match(form, /Northeast/);
-  assert.match(input, /Abbreviations like NE, St, Ave work fine\. Polk County results are prioritized\./);
+  assert.match(form, /e\.g\. 123 NE Main St, Lakeland or Try “King Ave” or “Kings Avenue”/);
+  assert.match(input, /Abbreviations and small differences \(NE \/ Northeast, King \/ Kings\) are handled\. Polk County results are prioritized\./);
   assert.match(input, /ADDRESS_SUGGEST_MIN_CHARS/);
   assert.match(input, /ADDRESS_SUGGEST_DEBOUNCE_MS/);
+});
+
+test("trailing s on a street name stems and a different name does not", () => {
+  assert.equal(stemTrailingS("kings"), "king");
+  assert.equal(stemTrailingS("Kings"), "king");
+  assert.equal(stemTrailingS("aves"), "ave");
+  assert.equal(stemTrailingS("oaks"), "oak");
+  assert.equal(stemTrailingS("king"), "king");
+  assert.equal(stemTrailingS("ave"), "ave");
+  assert.equal(stemTrailingS("sts"), "sts");
+  assert.equal(stemTrailingS("cross"), "cross");
+  assert.equal(stemTrailingS("main"), "main");
+  assert.equal(stemStreetTokens("1221 Kings avenue Lakeland"), "1221 king avenue lakeland");
+  assert.equal(stemStreetTokens("1221 Kings aves Lakeland"), "1221 king ave lakeland");
+  assert.equal(stemStreetTokens("123 NE Main St, Lakeland"), null);
+  const variants = addressQueryVariants("1221 Kings avenue Lakeland");
+  const king = variants.findIndex((variant) => /\bking\b/i.test(variant) && !/\bkings\b/i.test(variant));
+  assert.ok(king > 0);
+  assert.match(variants[0], /kings/i);
+  assert.match(variants[king], /king/i);
+  assert.match(variants[king], /avenue|ave/i);
+  const plural = addressQueryVariants("1221 King Avenue Lakeland");
+  assert.ok(plural.some((variant) => /\bkings\b/i.test(variant)));
+  const plan = suggestionQueryPlan("1221 Kings avenue Lakeland");
+  assert.match(plan[0], /kings/i);
+  assert.match(plan[0], /lakeland/i);
+  const stemmed = plan.findIndex((q) => /\bking\b/i.test(q) && !/\bkings\b/i.test(q) && /lakeland/i.test(q));
+  assert.ok(stemmed > 0);
+  assert.ok(plan.findIndex((q) => /\bkings\b/i.test(q)) < stemmed);
+});
+
+test("city typos resolve to the intended city and a different name does not", () => {
+  assert.equal(intendedCity("1221 King Ave Lakland"), "Lakeland");
+  assert.equal(intendedCity("1221 King Ave, Lakland, FL"), "Lakeland");
+  assert.equal(correctFuzzyCity("1221 King Ave Lakland"), "1221 King Ave Lakeland");
+  assert.equal(intendedCity("605 Central Ave Bartw"), "Bartow");
+  assert.equal(correctFuzzyCity("605 South Central Avenue Bartw"), "605 South Central Avenue Bartow");
+  assert.equal(intendedCity("605 Central Ave Barton"), null);
+  assert.equal(correctFuzzyCity("100 Main St"), null);
+  assert.equal(correctFuzzyCity("123 NE Main St, Lakeland"), null);
+  assert.equal(intendedCity("100 Main St Miami"), "Miami");
+  assert.equal(intendedCity("100 Main St"), null);
+  const typed = rankAddressSuggestions(
+    [
+      { city: "Lakeland", county: "Polk", street: "100 Main Street" },
+      { city: "Tampa", county: "Hillsborough", street: "100 Main Street" },
+      { city: "Miami", county: "Miami-Dade", street: "100 Main Street" },
+    ],
+    "100 Main St Tampaa",
+  );
+  assert.equal(typed[0].city, "Tampa");
+  assert.ok(typed.some((row) => row.city === "Miami"));
+  const streets = rankAddressSuggestions(
+    [
+      { city: "Lakeland", county: "Polk", street: "1221 King Avenue" },
+      { city: "Lakeland", county: "Polk", street: "1221 Kings Avenue" },
+    ],
+    "1221 Kings Avenue Lakeland",
+  );
+  assert.equal(streets[0].street, "1221 Kings Avenue");
+  const parts = highlightAddressLabel("1221 King Avenue, Lakeland, FL 33803", "1221 Kings avenue Lakeland");
+  const matched = parts.filter((part) => part.match).map((part) => part.text);
+  assert.ok(matched.includes("1221"));
+  assert.ok(matched.includes("King"));
+  assert.ok(matched.includes("Avenue"));
+  assert.ok(matched.includes("Lakeland"));
+  assert.equal(matched.includes("FL"), false);
+  const typoCity = highlightAddressLabel("1221 King Avenue, Lakeland, FL 33803", "1221 King Ave Lakland");
+  assert.ok(typoCity.some((part) => part.match && part.text === "Lakeland"));
+  const overridden = suggestionFromNominatim(
+    { address: { house_number: "3749", road: "Feather Drive", city: "Highland City", county: "Polk County", state: "Florida", postcode: "33812" } },
+    "3749 Feather Dr Lakland",
+  );
+  assert.equal(overridden?.city, "Lakeland");
+  const bartow = suggestionFromNominatim(
+    { address: { house_number: "605", road: "South Central Avenue", city: "Winter Haven", county: "Polk County", state: "Florida", postcode: "33880" } },
+    "605 South Central Avenue Bartw",
+  );
+  assert.equal(bartow?.city, "Bartow");
+});
+
+test("Kings avenue Lakeland suggests King Avenue and ignores a different Kings road", { concurrency: false }, async () => {
+  const original = globalThis.fetch;
+  const queries: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url);
+    const q = url.searchParams.get("q") ?? "";
+    queries.push(q);
+    const kings = /\bkings\b/i.test(q);
+    const king = /\bking\b/i.test(q) && !kings;
+    const lakeland = /lakeland/i.test(q);
+    if (king && lakeland) {
+      return new Response(JSON.stringify([
+        { address: { house_number: "1221", road: "King Avenue", city: "Lakeland", county: "Polk County", state: "Florida", postcode: "33803" } },
+      ]), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    if (kings && !lakeland) {
+      return new Response(JSON.stringify([
+        { address: { house_number: "1221", road: "Kings Avenue", city: "Jacksonville", county: "Duval County", state: "Florida", postcode: "32209" } },
+      ]), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    return new Response(JSON.stringify([]), { status: 200, headers: { "Content-Type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    const result = await suggestFloridaAddresses("1221 Kings avenue Lakeland", { minIntervalMs: 0, state: { lastAt: 0, cache: new Map() } });
+    assert.equal(result.status, "ok");
+    assert.match(result.suggestions[0].street, /King Ave/i);
+    assert.doesNotMatch(result.suggestions[0].street, /Kings/i);
+    assert.equal(result.suggestions[0].city, "Lakeland");
+    assert.equal(result.suggestions[0].county, "Polk");
+    assert.equal(result.suggestions[0].zip, "33803");
+    assert.equal(evaluateAddressSubmission(result.suggestions[0].street, result.suggestions[0].token).ok, true);
+    assert.equal(result.suggestions.some((row) => /Kings/i.test(row.street)), false);
+    const kingAt = queries.findIndex((q) => /\bking\b/i.test(q) && !/\bkings\b/i.test(q) && /lakeland/i.test(q));
+    const kingsAt = queries.findIndex((q) => /\bkings\b/i.test(q));
+    assert.ok(kingsAt >= 0 && kingAt > kingsAt);
+    assert.match(queries[0], /kings/i);
+    assert.match(queries[0], /lakeland/i);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("mistyped Lakeland and Bartow still surface that city", { concurrency: false }, async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url);
+    const q = url.searchParams.get("q") ?? "";
+    const lakeland = /lakeland/i.test(q) && /\bking\b/i.test(q);
+    const bartow = /bartow/i.test(q) && /central/i.test(q);
+    const hits = lakeland
+      ? [{ address: { house_number: "1221", road: "King Avenue", city: "Lakeland", county: "Polk County", state: "Florida", postcode: "33803" } }]
+      : bartow
+        ? [
+            { address: { house_number: "605", road: "South Central Avenue", city: "Winter Haven", county: "Polk County", state: "Florida", postcode: "33880" } },
+            { address: { house_number: "605", road: "South Central Avenue", city: "Bartow", county: "Polk County", state: "Florida", postcode: "33830" } },
+            { address: { house_number: "605", road: "South Central Avenue", city: "Tampa", county: "Hillsborough County", state: "Florida", postcode: "33602" } },
+          ]
+        : [];
+    return new Response(JSON.stringify(hits), { status: 200, headers: { "Content-Type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    const lakeland = await suggestFloridaAddresses("1221 King Avenue Lakland", { minIntervalMs: 0, state: { lastAt: 0, cache: new Map() } });
+    assert.equal(lakeland.status, "ok");
+    assert.match(lakeland.suggestions[0].street, /King Ave/i);
+    assert.equal(lakeland.suggestions[0].city, "Lakeland");
+    assert.equal(lakeland.suggestions[0].county, "Polk");
+    const bartow = await suggestFloridaAddresses("605 Central Ave Bartw", { minIntervalMs: 0, state: { lastAt: 0, cache: new Map() } });
+    assert.equal(bartow.suggestions[0].city, "Bartow");
+    assert.match(bartow.suggestions[0].street, /Central/i);
+    assert.ok(bartow.suggestions.some((row) => row.zip === "33830"));
+    assert.ok(bartow.suggestions.some((row) => row.county === "Hillsborough"));
+  } finally {
+    globalThis.fetch = original;
+  }
 });
 
 test("suggest route source does not read the PermitStack key", () => {

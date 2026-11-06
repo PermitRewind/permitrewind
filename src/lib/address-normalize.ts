@@ -1,9 +1,11 @@
-import { CITY_SUGGESTIONS } from "./jurisdictions";
+import { CITY_SUGGESTIONS, trailingKnownCity } from "./jurisdictions";
 
 /**
  * Address lookup variants. Nominatim and permit rows store the same road as
  * "NE" or "Northeast", and as "St" or "Street". Callers search the expanded
- * form, the raw input, and the abbreviated form.
+ * form, the raw input, and the abbreviated form before near-matches: a trailing
+ * s on a street name ("Kings" / "King") and a small city typo ("Lakland" /
+ * "Lakeland", "Bartw" / "Bartow").
  *
  * PermitStack's own query string still goes through `toPermitStackAddress`.
  */
@@ -200,19 +202,324 @@ export function abbreviateAddress(query: string): string {
   return finish(chunks, places);
 }
 
-/** Expanded, then the raw input, then abbreviated. Case-insensitive duplicates drop out. */
+const STREET_OR_DIRECTION = new Set([
+  ...Object.keys(DIRECTIONAL_EXPAND),
+  ...Object.keys(DIRECTIONAL_ABBREV),
+  ...Object.keys(STREET_TYPE_EXPAND),
+  ...Object.keys(STREET_TYPE_ABBREV),
+  "fl",
+  "florida",
+]);
+
+const CITY_MATCHES = [...new Set(CITY_SUGGESTIONS)]
+  .map((name) => ({ name, norm: normCity(name) }))
+  .filter((city) => city.norm.length >= 4);
+
+function normCity(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+/** Drop a trailing s so "kings" and "king", and "aves" and "ave", compare equal. */
+export function stemTrailingS(token: string): string {
+  const word = token.toLowerCase();
+  if (word.length > 3 && word.endsWith("s") && !word.endsWith("ss")) return word.slice(0, -1);
+  return word;
+}
+
+/** Edit distance with an early exit once the caller’s limit is exceeded. */
+export function levenshtein(a: string, b: string, limit = 2): number {
+  if (a === b) return 0;
+  const n = a.length;
+  const m = b.length;
+  if (Math.abs(n - m) > limit) return limit + 1;
+  if (!n) return m;
+  if (!m) return n;
+  let prev = Array.from({ length: m + 1 }, (_, index) => index);
+  for (let i = 1; i <= n; i++) {
+    const cur = [i];
+    let rowMin = cur[0];
+    for (let j = 1; j <= m; j++) {
+      const cost = a.charCodeAt(i - 1) === b.charCodeAt(j - 1) ? 0 : 1;
+      const val = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+      cur[j] = val;
+      if (val < rowMin) rowMin = val;
+    }
+    if (rowMin > limit) return limit + 1;
+    prev = cur;
+  }
+  return prev[m];
+}
+
+function isIndel(a: string, b: string): boolean {
+  if (a === b) return false;
+  const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a];
+  if (longer.length - shorter.length !== 1) return false;
+  let index = 0;
+  while (index < shorter.length && shorter[index] === longer[index]) index += 1;
+  return shorter.slice(index) === longer.slice(index + 1);
+}
+
+function isSubsequence(shorter: string, longer: string): boolean {
+  let index = 0;
+  for (let cursor = 0; cursor < longer.length && index < shorter.length; cursor++) {
+    if (shorter[index] === longer[cursor]) index += 1;
+  }
+  return index === shorter.length;
+}
+
+/**
+ * A near city edit, not a different name. Inserting or deleting one character
+ * is enough for Lakland/Lakeland and Bartw/Bartow. A substitution has to be on
+ * a longer name so Barton does not become Bartow.
+ */
+function cityEditOk(typed: string, city: string, dist: number): boolean {
+  if (dist <= 0 || dist > 2) return false;
+  const shorterLen = Math.min(typed.length, city.length);
+  const longerLen = Math.max(typed.length, city.length);
+  const [shorter, longer] = typed.length <= city.length ? [typed, city] : [city, typed];
+  if (dist === 1 && shorterLen >= 5 && isIndel(typed, city)) return true;
+  if (dist === 1 && shorterLen >= 8 && typed.length === city.length && typed.slice(0, 4) === city.slice(0, 4)) return true;
+  if (
+    dist === 2 &&
+    shorterLen >= 6 &&
+    longerLen - shorterLen === 2 &&
+    typed.slice(0, 3) === city.slice(0, 3) &&
+    isSubsequence(shorter, longer)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function exactCityName(phrase: string): string | null {
+  const norm = normCity(phrase);
+  if (!norm) return null;
+  return CITY_MATCHES.find((city) => city.norm === norm)?.name ?? null;
+}
+
+function localityPhraseSkippable(phrase: string): boolean {
+  const parts = normCity(phrase).split(" ").filter(Boolean);
+  return parts.length > 0 && parts.every((part) => STREET_OR_DIRECTION.has(part) || /^\d+$/.test(part));
+}
+
+/** Unique known city within a small edit of `phrase`, or null when it is exact, tied, or too far. */
+export function fuzzyKnownCity(phrase: string): string | null {
+  const typed = normCity(phrase);
+  if (typed.length < 5 || !/[a-z]/.test(typed) || exactCityName(phrase)) return null;
+  let best: { name: string; dist: number } | null = null;
+  let ties = 0;
+  for (const city of CITY_MATCHES) {
+    if (city.norm[0] !== typed[0] || Math.abs(city.norm.length - typed.length) > 2) continue;
+    const dist = levenshtein(typed, city.norm, 2);
+    if (!cityEditOk(typed, city.norm, dist)) continue;
+    if (!best || dist < best.dist) {
+      best = { name: city.name, dist };
+      ties = 1;
+    } else if (dist === best.dist && city.name !== best.name) {
+      ties += 1;
+    }
+  }
+  return best && ties === 1 ? best.name : null;
+}
+
+function peelStateZip(tokens: string[]): number {
+  let end = tokens.length;
+  while (end > 0) {
+    const bare = tokens[end - 1].replace(/[.,]/g, "");
+    if (/^\d{5}(?:-\d{4})?$/.test(bare) || /^(fl|florida)$/i.test(bare)) {
+      end -= 1;
+      continue;
+    }
+    break;
+  }
+  return end;
+}
+
+/**
+ * City the visitor meant. Exact trailing cities win. Otherwise a unique near
+ * miss at the end of the line (Lakland → Lakeland, Bartw → Bartow).
+ */
+export function intendedCity(query: string): string | null {
+  const known = trailingKnownCity(query);
+  if (known) return known;
+  const tokens = query.trim().replace(/\s+/g, " ").split(" ").filter(Boolean);
+  const end = peelStateZip(tokens);
+  const max = Math.min(3, end);
+  for (let len = max; len >= 1; len--) {
+    const phrase = tokens.slice(end - len, end).join(" ");
+    if (localityPhraseSkippable(phrase)) continue;
+    const city = fuzzyKnownCity(phrase);
+    if (city) return city;
+  }
+  return null;
+}
+
+/** Query with a mistyped trailing city replaced. Null when the city is already exact or unknown. */
+export function correctFuzzyCity(query: string): string | null {
+  const tokens = query.trim().replace(/\s+/g, " ").split(" ").filter(Boolean);
+  const end = peelStateZip(tokens);
+  const max = Math.min(3, end);
+  for (let len = max; len >= 1; len--) {
+    const phrase = tokens.slice(end - len, end).join(" ");
+    if (!localityPhraseSkippable(phrase) && exactCityName(phrase)) return null;
+  }
+  for (let len = max; len >= 1; len--) {
+    const phrase = tokens.slice(end - len, end).join(" ");
+    if (localityPhraseSkippable(phrase)) continue;
+    const city = fuzzyKnownCity(phrase);
+    if (!city) continue;
+    return [...tokens.slice(0, end - len), city, ...tokens.slice(end)].join(" ");
+  }
+  return null;
+}
+
+export function citiesNear(a: string, b: string): boolean {
+  const left = normCity(a);
+  const right = normCity(b);
+  if (!left || !right) return false;
+  if (left === right) return true;
+  return cityEditOk(left, right, levenshtein(left, right, 2));
+}
+
+/** Street-name tokens are close: same stem, or a 1–2 character indel on a long token. */
+export function tokensNear(a: string, b: string): boolean {
+  const left = stemTrailingS(a);
+  const right = stemTrailingS(b);
+  if (left === right && left.length >= 3) return true;
+  if (left.length < 5 || right.length < 5 || left[0] !== right[0]) return false;
+  return cityEditOk(left, right, levenshtein(left, right, 2));
+}
+
+function localityWordCount(words: string[]): number {
+  const max = Math.min(3, words.length);
+  for (let len = max; len >= 1; len--) {
+    const slice = words.slice(words.length - len);
+    if (slice.some((word) => word.startsWith("placehold"))) {
+      if (slice.length === 1) return 1;
+      continue;
+    }
+    const phrase = slice.join(" ");
+    if (localityPhraseSkippable(phrase)) continue;
+    if (exactCityName(phrase) || fuzzyKnownCity(phrase)) return len;
+  }
+  return 0;
+}
+
+function streetNameIndexes(words: string[]): number[] {
+  const limit = words.length - localityWordCount(words);
+  const indexes: number[] = [];
+  for (let index = 0; index < limit; index++) {
+    const word = words[index];
+    if (word.startsWith("placehold") || /^\d/.test(word) || STREET_OR_DIRECTION.has(word) || word.length <= 3) continue;
+    indexes.push(index);
+  }
+  return indexes;
+}
+
+function rewriteWords(query: string, edits: Map<number, string>): string | null {
+  if (!edits.size) return null;
+  const { chunks, places } = prepare(query);
+  let wordIndex = 0;
+  let changed = false;
+  for (const chunk of chunks) {
+    if (!chunk.word) continue;
+    const next = edits.get(wordIndex);
+    if (next && next !== chunk.value.toLowerCase()) {
+      chunk.value = next;
+      changed = true;
+    }
+    wordIndex += 1;
+  }
+  return changed ? finish(chunks, places) : null;
+}
+
+/** "1221 Kings avenue Lakeland" → "1221 king avenue lakeland". Null when nothing changes. */
+export function stemStreetTokens(query: string): string | null {
+  const { words } = prepare(query);
+  const edits = new Map<number, string>();
+  for (const index of streetNameIndexes(words)) {
+    const stemmed = stemTrailingS(words[index]);
+    if (stemmed !== words[index]) edits.set(index, stemmed);
+  }
+  return rewriteWords(query, edits);
+}
+
+/** Last street-name token gains an s so "King" can find "Kings" after the exact queries miss. */
+export function pluralizeStreetToken(query: string): string | null {
+  const { words } = prepare(query);
+  const index = streetNameIndexes(words).filter((item) => !words[item].endsWith("s")).at(-1);
+  if (index === undefined) return null;
+  return rewriteWords(query, new Map([[index, `${words[index]}s`]]));
+}
+
+/**
+ * 0 exact street-name token, 1 trailing-s stem, 2 other near edit, 3 not close.
+ * Missing street names stay 0 so city ranking is unchanged.
+ */
+export function streetTokenRank(query: string, street: string): number {
+  const { words } = prepare(query);
+  const wanted = streetNameIndexes(words).map((index) => words[index]);
+  if (!wanted.length) return 0;
+  const road = street.toLowerCase().split(/[^a-z0-9]+/).filter((token) => token && !STREET_OR_DIRECTION.has(token) && !/^\d/.test(token));
+  const rankOf = (token: string) => {
+    if (road.some((part) => part === token)) return 0;
+    const stem = stemTrailingS(token);
+    if (stem.length >= 3 && road.some((part) => stemTrailingS(part) === stem)) return 1;
+    if (road.some((part) => tokensNear(token, part))) return 2;
+    return 3;
+  };
+  return Math.max(...wanted.map(rankOf));
+}
+
+function pushVariant(variants: string[], seen: Set<string>, variant: string | null | undefined) {
+  if (!variant) return;
+  const cleaned = variant.replace(/\s+/g, " ").trim();
+  const key = cleaned.toLowerCase();
+  if (!key || seen.has(key)) return;
+  seen.add(key);
+  variants.push(cleaned);
+}
+
+function pushFuzzy(variants: string[], seen: Set<string>, variant: string | null) {
+  if (!variant) return;
+  pushVariant(variants, seen, variant);
+  pushVariant(variants, seen, expandAddress(variant));
+  pushVariant(variants, seen, abbreviateAddress(variant));
+}
+
+/**
+ * Expanded, then the raw input, then abbreviated, then near-matches.
+ * Near-matches drop a trailing s on street-name tokens, correct a trailing
+ * city typo, and only then add an s. Case-insensitive duplicates drop out.
+ */
 export function addressQueryVariants(query: string): string[] {
   const original = query.trim().replace(/\s+/g, " ").slice(0, 120);
   if (!original) return [];
   const seen = new Set<string>();
   const variants: string[] = [];
-  for (const variant of [expandAddress(original), original, abbreviateAddress(original)]) {
-    const key = variant.toLowerCase().replace(/\s+/g, " ").trim();
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    variants.push(variant);
+  const expanded = expandAddress(original);
+  for (const variant of [expanded, original, abbreviateAddress(original)]) {
+    pushVariant(variants, seen, variant);
   }
+  pushFuzzy(variants, seen, stemStreetTokens(expanded));
+  const corrected = correctFuzzyCity(expanded) ?? correctFuzzyCity(original);
+  if (corrected) {
+    const correctedExpanded = expandAddress(corrected);
+    pushFuzzy(variants, seen, correctedExpanded);
+    pushFuzzy(variants, seen, stemStreetTokens(correctedExpanded));
+  }
+  pushFuzzy(variants, seen, pluralizeStreetToken(expanded));
   return variants;
+}
+
+function labelTokenMatches(text: string, forms: Set<string>): boolean {
+  const lower = text.toLowerCase();
+  if (HIGHLIGHT_SKIP.has(lower)) return false;
+  if (forms.has(lower) || forms.has(stemTrailingS(lower))) return true;
+  for (const form of forms) {
+    if (tokensNear(form, lower)) return true;
+  }
+  return false;
 }
 
 /** Split a suggestion label into match / plain pieces for the typed query. */
@@ -223,10 +530,12 @@ export function highlightAddressLabel(label: string, query: string): { text: str
       if (HIGHLIGHT_SKIP.has(token)) continue;
       if (token.length === 1 && !(token in DIRECTIONAL_EXPAND) && !/^\d$/.test(token)) continue;
       forms.add(token);
+      const stemmed = stemTrailingS(token);
+      if (stemmed !== token) forms.add(stemmed);
     }
   }
   return label.split(/([^A-Za-z0-9]+)/).filter((part) => part !== "").map((text) => ({
     text,
-    match: forms.has(text.toLowerCase()),
+    match: labelTokenMatches(text, forms),
   }));
 }
