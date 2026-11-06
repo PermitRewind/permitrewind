@@ -93,7 +93,7 @@ test("19156 Dove Creek Dr keeps three Tampa permits", async () => {
     assert.ok(result.permits.every((p) => sourceAttribution(p) === "PermitStack · statewide Florida"));
     assert.equal(result.notices.some((n) => /hidden/i.test(n)), false);
     assert.equal(seen?.searchParams.get("state"), "FL");
-    assert.equal(seen?.searchParams.get("address"), "19156 Dove Creek Dr");
+    assert.equal(seen?.searchParams.get("address")?.toLowerCase().replace(/[^a-z0-9]/g, ""), "19156dovecreekdr");
     assert.equal(seen?.searchParams.get("city"), null);
     assert.equal(seen?.searchParams.get("jurisdiction"), null);
     assert.equal(seen?.pathname, "/v1/permits/search");
@@ -168,7 +168,7 @@ test("Dove Creek search keeps all three Tampa permits, including a directional r
   });
   try {
     const result = await new PermitStackProvider("test-key").search({ mode: "address", q: "19156 Dove Creek Dr" });
-    assert.equal(seen?.searchParams.get("address"), "19156 Dove Creek Dr");
+    assert.equal(seen?.searchParams.get("address")?.toLowerCase().replace(/[^a-z0-9]/g, ""), "19156dovecreekdr");
     assert.equal(seen?.searchParams.get("city"), null);
     assert.deepEqual(
       result.permits.map((p) => p.permitNumber).sort(),
@@ -439,6 +439,117 @@ test("3533 Sam Allen Oaks Cir Plant City keeps Cir, Circle, and CR including SFR
   } finally {
     restore();
   }
+});
+
+test("3938 WhiteDove Dr returns the same three permits for Highland City and Lakeland, either spelling", async () => {
+  const lakelandRows = [
+    stackRow({ id: "dddddddd-dddd-4ddd-8ddd-ddddddddddd1", permit_number: "WD-1", address_street: "3938 WHITE DOVE DR", address_city: "LAKELAND", address_zip: "33812", jurisdiction_name: "City of Lakeland", date_issued: "2022-03-01" }),
+    stackRow({ id: "dddddddd-dddd-4ddd-8ddd-ddddddddddd2", permit_number: "WD-2", address_street: "3938 WHITEDOVE DR", address_city: "LAKELAND", address_zip: "33812", jurisdiction_name: "Polk County", date_issued: "2018-06-01" }),
+    stackRow({ id: "dddddddd-dddd-4ddd-8ddd-ddddddddddd3", permit_number: "WD-3", address_street: "3938 WHITE DOVE DRIVE", address_city: "LAKELAND", address_zip: "33812", jurisdiction_name: "City of Lakeland", date_issued: "2011-01-01" }),
+  ];
+  const tampa = stackRow({ id: "dddddddd-dddd-4ddd-8ddd-ddddddddddd4", permit_number: "WD-T", address_street: "3938 WHITE DOVE DR", address_city: "TAMPA", address_zip: "33647", jurisdiction_name: "Hillsborough County", date_issued: "2024-01-01" });
+  const seen: URL[] = [];
+  const restore = mockFetch((url) => {
+    seen.push(url);
+    const city = url.searchParams.get("city");
+    const address = (url.searchParams.get("address") ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (city === "Highland City") return { body: { results: [], total: 0, page: 1, per_page: 100 } };
+    if (!address.includes("3938whitedove")) return { body: { results: [], total: 0, page: 1, per_page: 100 } };
+    const results = city ? lakelandRows : [...lakelandRows, tampa];
+    return { body: { results, total: results.length, page: 1, per_page: 100 } };
+  });
+  try {
+    const provider = new PermitStackProvider("test-key");
+    const place = { state: "FL", zip: "33812", county: "Polk" };
+    const numbers = async (q: string, city: string) => {
+      const result = await provider.search({ mode: "address", q, city, ...place });
+      return result.permits.map((permit) => permit.permitNumber).sort();
+    };
+    const lakeland = await numbers("3938 WhiteDove Dr", "Lakeland");
+    const highland = await numbers("3938 WhiteDove Dr", "Highland City");
+    const spacedLakeland = await numbers("3938 White Dove Dr", "Lakeland");
+    const spacedHighland = await numbers("3938 White Dove Drive", "Highland City");
+    assert.deepEqual(lakeland, ["WD-1", "WD-2", "WD-3"]);
+    assert.deepEqual(highland, lakeland);
+    assert.deepEqual(spacedLakeland, lakeland);
+    assert.deepEqual(spacedHighland, lakeland);
+    assert.equal(seen.some((url) => url.searchParams.get("city") === "Highland City"), false);
+    assert.ok(seen.some((url) => url.searchParams.get("city") === "Lakeland"));
+    assert.ok(seen.some((url) => /white dove/i.test(url.searchParams.get("address") ?? "")));
+    assert.ok(seen.some((url) => /whitedove/i.test(url.searchParams.get("address") ?? "") && !/white dove/i.test(url.searchParams.get("address") ?? "")));
+  } finally {
+    restore();
+  }
+
+  const stack = permit({
+    id: "dddddddd-dddd-4ddd-8ddd-ddddddddddd1",
+    permitNumber: "WD-1",
+    address: "3938 WHITE DOVE DR",
+    city: "Lakeland",
+    zip: "33812",
+    county: "Polk",
+    jurisdiction: "City of Lakeland",
+    source: "PermitStack",
+    dateIssued: "2022-03-01",
+  });
+  const accela = permit({
+    id: "polk-accela:WD-2",
+    permitNumber: "WD-2",
+    address: "3938 WHITEDOVE DR",
+    city: "Lakeland",
+    zip: "33812",
+    county: "Polk",
+    jurisdiction: "Polk County",
+    source: "Polk County Accela",
+    dateIssued: "2018-06-01",
+  });
+  const appraiser = permit({
+    id: "polk-pa:3938:WD-3",
+    permitNumber: "WD-3",
+    address: "3938 WHITE DOVE DR",
+    city: "Lakeland",
+    county: "Polk",
+    jurisdiction: "Lakeland",
+    source: "Polk County Property Appraiser",
+    dateIssued: "2011-01-01",
+  });
+  const otherCity = permit({
+    id: "polk-accela:WD-T",
+    permitNumber: "WD-T",
+    address: "3938 WHITE DOVE DR",
+    city: "Tampa",
+    zip: "33647",
+    county: "Hillsborough",
+    jurisdiction: "Hillsborough County",
+    source: "Polk County Accela",
+    dateIssued: "2024-01-01",
+  });
+  const extra = (name: string, permits: Permit[]): PermitProvider => ({
+    name,
+    appliesTo: shouldMergePolkSources,
+    async search() {
+      return { permits, total: permits.length, page: 1, perPage: permits.length, notices: [] };
+    },
+    async getPermit() {
+      return null;
+    },
+  });
+  const search = (q: string, city: string) => new CompositeProvider(
+    {
+      name: "PermitStack",
+      async search() {
+        return { permits: [stack], total: 1, page: 1, perPage: 1, notices: [] };
+      },
+      async getPermit() {
+        return null;
+      },
+    },
+    [extra("Polk County Accela", [accela, otherCity]), extra("Polk County Property Appraiser", [appraiser])],
+  ).search({ mode: "address", q, city, state: "FL", zip: "33812", county: "Polk" });
+  const fromLakeland = (await search("3938 White Dove Dr", "Lakeland")).permits.map((row) => row.permitNumber).sort();
+  const fromHighland = (await search("3938 WhiteDove Dr", "Highland City")).permits.map((row) => row.permitNumber).sort();
+  assert.deepEqual(fromLakeland, ["WD-1", "WD-2", "WD-3"]);
+  assert.deepEqual(fromHighland, fromLakeland);
 });
 
 test("live PermitStack search for 19156 Dove Creek Dr returns three Tampa permits", { skip: !process.env.PERMITSTACK_API_KEY }, async () => {

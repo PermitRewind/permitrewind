@@ -1,6 +1,6 @@
 import "server-only";
 import type { PermitProvider } from "./types";
-import { cityPreference, loosePermitStackAddress, parseAddressQuery, permitAddressMatches, splitStreetUnit, toPermitStackAddress } from "../address";
+import { cityPreference, hardCity, loosePermitStackAddress, parseAddressQuery, permitAddressMatches, permitAddressQueries, selectPermitsByCity, splitStreetUnit } from "../address";
 import { getRegion, permitInCoverage } from "../jurisdictions";
 import { isPermitStackId } from "../permit-link";
 import { Permit, ProviderError, SearchQuery, SearchResult } from "../types";
@@ -89,6 +89,9 @@ export class PermitStackProvider implements PermitProvider {
     const q = query.q.trim();
     const parsed = query.mode === "address" ? parseAddressQuery(q) : null;
     const wantedCity = query.city?.trim() || parsed?.city || "";
+    // Only a permitting city is sent. A CDP such as Highland City would AND the
+    // query down to zero; the street is searched instead and ZIP/county narrows it.
+    const apiCity = hardCity(wantedCity) || undefined;
     const base: Record<string, string | undefined> = {
       state: query.state?.trim() || region.state,
       category: query.category || undefined,
@@ -101,40 +104,68 @@ export class PermitStackProvider implements PermitProvider {
     // PermitStack ANDs every param. zip_code drops rows that leave ZIP blank or
     // disagree with Nominatim, so ZIP stays on the form and is not sent.
     const attempts: Record<string, string | undefined>[] = [];
+    const specificAddresses = parsed ? permitAddressQueries(parsed) : [];
     if (query.mode === "address" && parsed) {
-      const built = toPermitStackAddress(parsed);
-      const city = wantedCity || undefined;
-      const specific = built.address;
-      attempts.push({ ...base, address: specific, city });
+      for (const address of specificAddresses) attempts.push({ ...base, address, city: apiCity });
       const loose = loosePermitStackAddress(parsed);
-      if (loose && loose.toLowerCase() !== specific.toLowerCase()) attempts.push({ ...base, address: loose, city });
-      if (city) attempts.push({ ...base, address: specific });
+      if (loose && !specificAddresses.some((address) => address.toLowerCase() === loose.toLowerCase())) {
+        attempts.push({ ...base, address: loose, city: apiCity });
+      }
+      if (apiCity) {
+        for (const address of specificAddresses) attempts.push({ ...base, address });
+      }
     } else if (query.mode === "parcel") {
-      attempts.push({ ...base, parcel: q, city: wantedCity || undefined });
+      attempts.push({ ...base, parcel: q, city: apiCity });
     } else {
-      attempts.push({ ...base, permit_number: q, city: wantedCity || undefined });
+      attempts.push({ ...base, permit_number: q, city: apiCity });
     }
 
-    const keep = (body: { results?: unknown[] }) => {
-      const all: Permit[] = (body.results ?? []).map(mapPermit);
+    const keep = (rows: unknown[]) => {
+      const all: Permit[] = rows.map(mapPermit);
       const covered = all.filter((p) => permitInCoverage(region, p));
       let permits = parsed?.streetName ? covered.filter((p) => permitAddressMatches(parsed, p)) : covered;
-      if (wantedCity && !query.broaden) permits = permits.filter((p) => cityPreference(wantedCity, p) < 2);
+      permits = selectPermitsByCity(permits, { city: wantedCity, zip: query.zip, county: query.county, broaden: query.broaden });
       return { all, covered, permits };
     };
 
-    let body = await this.request("/v1/permits/search", attempts[0]);
-    let picked = keep(body);
-    for (let i = 1; i < attempts.length && picked.permits.length === 0; i++) {
+    const seenIds = new Set<string>();
+    const mergedRows: unknown[] = [];
+    type SearchBody = { results?: unknown[]; tier_window_days?: number; tier_window_from?: string; total?: number; page?: number; per_page?: number };
+    let body: SearchBody = {};
+    const take = (next: SearchBody) => {
+      for (const row of next.results ?? []) {
+        const id = String((row as { id?: string; permit_number?: string }).id ?? (row as { permit_number?: string }).permit_number ?? "");
+        const key = id || JSON.stringify(row);
+        if (seenIds.has(key)) continue;
+        seenIds.add(key);
+        mergedRows.push(row);
+      }
+    };
+    // Compound spellings are the same street, so their rows are unioned.
+    // A shorter street, then a query without city, run only when that union is empty.
+    const compoundCount = query.mode === "address" && parsed ? specificAddresses.length : 1;
+    body = await this.request("/v1/permits/search", attempts[0]);
+    take(body);
+    for (let i = 1; i < compoundCount && i < attempts.length; i++) {
       body = await this.request("/v1/permits/search", attempts[i]);
-      const next = keep(body);
-      if (next.permits.length || next.all.length) picked = next;
+      take(body);
+    }
+    let picked = keep(mergedRows);
+    for (let i = compoundCount; i < attempts.length && picked.permits.length === 0; i++) {
+      body = await this.request("/v1/permits/search", attempts[i]);
+      const next = keep([...(body.results ?? [])]);
+      if (next.permits.length || next.all.length) {
+        mergedRows.length = 0;
+        seenIds.clear();
+        take(body);
+        picked = next;
+      }
     }
     const { all, covered, permits } = picked;
     permits.sort((a, b) => cityPreference(wantedCity, a) - cityPreference(wantedCity, b) || ((b.dateIssued ?? b.dateFiled ?? "") > (a.dateIssued ?? a.dateFiled ?? "") ? 1 : -1));
 
     const notices: string[] = [];
-    if (body.tier_window_days) {
+    if (body?.tier_window_days) {
       notices.push(
         `Current data plan covers permits from ${body.tier_window_from} onward (last ${body.tier_window_days} days). Older history requires a paid PermitStack plan.`
       );
@@ -144,9 +175,9 @@ export class PermitStackProvider implements PermitProvider {
     }
     return {
       permits,
-      total: permits.length === all.length ? body.total ?? null : permits.length,
-      page: body.page ?? 1,
-      perPage: body.per_page ?? PER_PAGE,
+      total: permits.length === all.length ? body?.total ?? null : permits.length,
+      page: body?.page ?? 1,
+      perPage: body?.per_page ?? PER_PAGE,
       notices,
     };
   }

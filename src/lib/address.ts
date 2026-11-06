@@ -1,4 +1,5 @@
-import { CITY_SUGGESTIONS, trailingKnownCity } from "./jurisdictions";
+import { streetNameForms, streetNamesMatch, fuzzyKnownCity } from "./address-normalize";
+import { CITY_SUGGESTIONS, isPermittingCity, isPolkCity, localityFromQuery, normalizePlace, trailingKnownCity } from "./jurisdictions";
 
 /**
  * Street-suffix families. PermitStack stores the same road as Cir, Circle, or CR,
@@ -56,6 +57,21 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/** Known permitting city, or a one-edit miss such as Lakland → Lakeland. CDPs stay null. */
+export function hardCity(name: string | null | undefined): string | null {
+  if (!name?.trim()) return null;
+  const exact = CITY_SUGGESTIONS.find((city) => normalizePlace(city) === normalizePlace(name));
+  if (exact) return exact;
+  const fuzzy = fuzzyKnownCity(name);
+  if (!fuzzy || !isPermittingCity(fuzzy)) return null;
+  return CITY_SUGGESTIONS.find((city) => normalizePlace(city) === normalizePlace(fuzzy)) ?? fuzzy;
+}
+
+/** Trailing permitting city, or the place named after a comma (Highland City). */
+function localityInQuery(raw: string): string | null {
+  return trailingKnownCity(raw) ?? localityFromQuery(raw);
+}
+
 /** Drop a trailing city, state, and ZIP so the street line can be parsed. */
 function streetRemainder(raw: string, city: string | null): string {
   let s = raw.replace(/[#]/g, " ").replace(/[.,]/g, " ").replace(/\s+/g, " ").trim();
@@ -80,7 +96,7 @@ function stripUnit(tokens: string[]): string[] {
  */
 export function parseAddressQuery(raw: string): ParsedAddress {
   const trimmed = raw.trim();
-  const city = trailingKnownCity(trimmed);
+  const city = localityInQuery(trimmed);
   const zip = trimmed.match(/(?:^|[\s,])(\d{5})(?:-\d{4})?\s*$/)?.[1] ?? null;
   const tokens = stripUnit(streetRemainder(trimmed, city).split(/\s+/).filter(Boolean));
   let number: string | null = null;
@@ -150,7 +166,7 @@ function shortSuffix(suffix: string | null): string | null {
 
 /** Street line with a trailing city, state, and ZIP removed. */
 export function streetLineWithoutLocality(raw: string): string {
-  return streetRemainder(raw, trailingKnownCity(raw));
+  return streetRemainder(raw, localityInQuery(raw));
 }
 
 /**
@@ -168,11 +184,31 @@ export function toPermitStackAddress(parsed: ParsedAddress): { address: string; 
     : expandsSuffix(parsed.suffix)
       ? [parsed.number, name].filter(Boolean).join(" ")
       : [parsed.number, name, shortSuffix(parsed.suffix)].filter(Boolean).join(" ");
+  const city = hardCity(parsed.city);
   return {
     address,
-    ...(parsed.city ? { city: parsed.city } : {}),
+    ...(city ? { city } : {}),
     ...(parsed.zip ? { zip: parsed.zip } : {}),
   };
+}
+
+/** Street lines to send for one address. Compound names are queried both ways. */
+export function addressStreetForms(raw: string): string[] {
+  const parsed = parseAddressQuery(raw);
+  if (!parsed.streetName) return [raw.trim()];
+  const suffix = expandsSuffix(parsed.suffix) ? null : shortSuffix(parsed.suffix);
+  const lines = streetNameForms(parsed.streetName).map((name) => {
+    const pretty = name.split(/\s+/).filter(Boolean).map((part) => prettyToken(part)).join(" ");
+    return [parsed.number, pretty, suffix].filter(Boolean).join(" ");
+  });
+  const unique = [...new Set(lines)];
+  return unique.length ? unique : [raw.trim()];
+}
+
+/** PermitStack address strings for this parse, including the other compound spelling. */
+export function permitAddressQueries(parsed: ParsedAddress): string[] {
+  const primary = toPermitStackAddress(parsed).address;
+  return [...new Set([primary, ...addressStreetForms(parsed.raw)].filter(Boolean))];
 }
 
 /**
@@ -203,14 +239,13 @@ export function permitAddressMatches(
   const rowNumber = /^\d+[A-Z]?$/.test(rowTokens[0]) ? rowTokens[0] : null;
   if (parsed.number && rowNumber !== parsed.number.toUpperCase()) return false;
   const nameTokens = canonDirections(tokens(parsed.streetName));
-  const flat = canonDirections(rowTokens).join("");
-  const nameFlat = nameTokens.join("");
-  if (!containsSequence(canonDirections(rowTokens), nameTokens) && !flat.includes(nameFlat)) return false;
+  const resolvedCity = hardCity(parsed.city);
+  if (!containsSequence(canonDirections(rowTokens), nameTokens) && !streetNamesMatch(line, nameTokens.join(" "))) return false;
   if (parsed.suffix) {
     const rowSuffix = suffixInLine(line);
     if (rowSuffix && !suffixEquivalents(parsed.suffix).includes(rowSuffix)) return false;
   }
-  if (parsed.city && cityPreference(parsed.city, permit) >= 2) return false;
+  if (resolvedCity && cityPreference(resolvedCity, permit) >= 2) return false;
   return true;
 }
 
@@ -230,19 +265,82 @@ function knownCityIn(text: string): string | null {
 }
 
 /**
- * 0 = this city (or its "City of" jurisdiction), 1 = no city named, 2 = a different known city.
- * City is the primary rank, ahead of permit date.
+ * 0 = this permitting city (or its "City of" jurisdiction), 1 = no conflicting city,
+ * 2 = a different permitting city.
+ * An unofficial place name never scores 2, so it cannot wipe out a real AHJ.
+ * Among permitting cities, city is the rank ahead of permit date.
  */
 export function cityPreference(
   wanted: string | null | undefined,
   permit: { city?: string | null; jurisdiction?: string | null },
 ): number {
   if (!wanted?.trim()) return 0;
-  const target = norm(wanted);
+  const resolved = hardCity(wanted);
+  const target = norm(resolved ?? wanted);
+  const rawLabels = [permit.city, permit.jurisdiction].map((value) => (value ? norm(value).replace(/^CITY OF /, "") : "")).filter(Boolean);
+  if (rawLabels.some((label) => label === target || label === norm(wanted))) return 0;
   const named = [permit.city, permit.jurisdiction].map((value) => (value ? knownCityIn(value) : null)).filter((value): value is string => !!value);
   if (named.some((city) => city === target)) return 0;
+  if (!resolved) return 1;
   if (!named.length) return 1;
   return 2;
+}
+
+function zip5(value: string | null | undefined): string | null {
+  return value?.match(/\d{5}/)?.[0] ?? null;
+}
+
+function permitInCounty(
+  permit: { city?: string | null; jurisdiction?: string | null; county?: string | null },
+  county: string,
+): boolean {
+  const wanted = normalizePlace(county.replace(/\s+county$/i, ""));
+  if (!wanted) return false;
+  const fields = [permit.county, permit.jurisdiction, permit.city].filter((value): value is string => !!value?.trim());
+  if (fields.some((field) => {
+    const place = normalizePlace(field);
+    return place === wanted || place === `${wanted} county`;
+  })) return true;
+  if (wanted === "polk" && fields.some((field) => isPolkCity(field) || isPolkCity(field.replace(/^city of\s+/i, "")))) return true;
+  return false;
+}
+
+/** ZIP or county agrees, or the row does not say it is somewhere else. */
+export function placeKeeps(
+  permit: { city?: string | null; jurisdiction?: string | null; zip?: string | null; county?: string | null },
+  query: { zip?: string | null; county?: string | null },
+): boolean {
+  const zip = zip5(query.zip);
+  const permitZip = zip5(permit.zip);
+  const county = query.county?.trim() ?? "";
+  if (zip && permitZip && zip === permitZip) return true;
+  if (county && permitInCounty(permit, county)) return true;
+  if (!zip && !county) return true;
+  if (county && !permit.city && !permit.jurisdiction && !permit.county && !permitZip) return true;
+  if (zip && !permitZip && !county) return true;
+  return false;
+}
+
+/**
+ * Street matches stay. A permitting city drops other cities when it has any
+ * match. An unofficial place, or a city filter that would drop every row,
+ * keeps ZIP/county matches instead of returning nothing.
+ */
+export function selectPermitsByCity<T extends { city?: string | null; jurisdiction?: string | null; zip?: string | null; county?: string | null }>(
+  permits: T[],
+  query: { city?: string | null; zip?: string | null; county?: string | null; broaden?: boolean },
+): T[] {
+  if (!query.city?.trim() || query.broaden) return permits;
+  const resolved = hardCity(query.city);
+  if (resolved) {
+    const matched = permits.filter((permit) => cityPreference(resolved, permit) < 2);
+    if (matched.length) return matched;
+  }
+  if (query.county || query.zip) {
+    const placed = permits.filter((permit) => placeKeeps(permit, query));
+    if (placed.length) return placed;
+  }
+  return permits;
 }
 
 const UNIT_LABEL: Record<string, string> = { APT: "Apt", APARTMENT: "Apt", UNIT: "Unit", STE: "Suite", SUITE: "Suite" };

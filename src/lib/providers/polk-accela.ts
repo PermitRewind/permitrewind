@@ -1,8 +1,25 @@
 import "server-only";
 import * as cheerio from "cheerio";
 import type { PermitProvider } from "./types";
+import { addressStreetForms } from "../address";
 import { shouldMergePolkSources } from "../jurisdictions";
 import { Permit, ProviderError, SearchQuery, SearchResult } from "../types";
+
+function mergeStreetForms(parts: SearchResult[]): SearchResult {
+  const seen = new Set<string>();
+  const permits: Permit[] = [];
+  const notices: string[] = [];
+  for (const part of parts) {
+    for (const notice of part.notices) if (!notices.includes(notice)) notices.push(notice);
+    for (const permit of part.permits) {
+      const key = (permit.permitNumber ?? permit.id).toUpperCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      permits.push(permit);
+    }
+  }
+  return { permits, total: permits.length, page: 1, perPage: permits.length, notices };
+}
 
 /**
  * Polk County BOCC Accela Citizen Access (unincorporated Polk building permits, 2010+).
@@ -99,6 +116,18 @@ export class PolkAccelaProvider implements PermitProvider {
   }
 
   async search(query: SearchQuery): Promise<SearchResult> {
+    if (query.mode === "address") {
+      const forms = addressStreetForms(query.q);
+      if (forms.length > 1) {
+        const parts: SearchResult[] = [];
+        for (const q of forms) parts.push(await this.searchOnce({ ...query, q }));
+        return mergeStreetForms(parts);
+      }
+    }
+    return this.searchOnce(query);
+  }
+
+  private async searchOnce(query: SearchQuery): Promise<SearchResult> {
     const signal = AbortSignal.timeout(this.timeoutMs);
     const cookies: string[] = [];
     const q = query.q.trim();
