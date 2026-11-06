@@ -1,7 +1,7 @@
 import "server-only";
 import * as cheerio from "cheerio";
 import type { PermitProvider } from "./types";
-import { addressStreetForms } from "../address";
+import { addressStreetForms, parseAddressQuery } from "../address";
 import { shouldMergePolkSources } from "../jurisdictions";
 import { Permit, ProviderError, SearchQuery, SearchResult } from "../types";
 
@@ -42,18 +42,15 @@ export function isOtherRecord(num?: string | null, type?: string | null) {
   return /^BPS-/i.test(num ?? "") || /permit search request|lien search/i.test(type ?? "");
 }
 
-const SUFFIXES = new Set(["DR","DRIVE","ST","STREET","AVE","AVENUE","RD","ROAD","LN","LANE","CT","COURT","BLVD","CIR","CIRCLE","WAY","PL","PLACE","TER","TRL","TRAIL","PKWY","HWY","LOOP","RUN","PATH","PT","CV","XING","SQ"]);
-const DIRS = new Set(["N","S","E","W","NE","NW","SE","SW","NORTH","SOUTH","EAST","WEST"]);
-
-/** "3749 Feather Dr, Lakeland FL 33812" -> { number: "3749", street: "FEATHER" } */
+/**
+ * House number and street name for county portals.
+ * "3749 Feather Dr, Lakeland FL 33812" → { number: "3749", street: "FEATHER" }.
+ * A leading or trailing compass word is not part of the name, so
+ * "141 Browning Circle Southeast" searches as BROWNING, the same as "141 Browning Cir".
+ */
 export function parseAddress(raw: string): { number?: string; street: string } {
-  const first = raw.split(",")[0].toUpperCase().replace(/[.#]/g, " ").replace(/\s+/g, " ").trim();
-  const m = first.match(/^(\d+)\s+(.*)$/);
-  let words = (m ? m[2] : first).split(" ").filter(Boolean);
-  if (words.length > 1 && DIRS.has(words[0])) words = words.slice(1);
-  if (words.length > 1 && SUFFIXES.has(words[words.length - 1])) words = words.slice(0, -1);
-  if (words.length > 1 && DIRS.has(words[words.length - 1])) words = words.slice(0, -1);
-  return { number: m?.[1], street: words.join(" ") };
+  const parsed = parseAddressQuery(raw);
+  return { number: parsed.number ?? undefined, street: (parsed.streetName ?? "").toUpperCase() };
 }
 
 function toIso(d: string): string | null {

@@ -69,6 +69,70 @@ const DIRECTIONAL_ABBREV: Record<string, string> = {
   fort: "ft",
 };
 
+/**
+ * Compass quadrants only. Fort is a place word ("Fort King"), not a quadrant.
+ * Spelled-out compounds and two-word forms ("South East") share one abbrev.
+ */
+const COMPASS_TO_ABBREV: Record<string, string> = {
+  n: "N",
+  north: "N",
+  s: "S",
+  south: "S",
+  e: "E",
+  east: "E",
+  w: "W",
+  west: "W",
+  ne: "NE",
+  northeast: "NE",
+  nw: "NW",
+  northwest: "NW",
+  se: "SE",
+  southeast: "SE",
+  sw: "SW",
+  southwest: "SW",
+};
+
+const COMPASS_PAIRS: Record<string, string> = {
+  "n e": "NE",
+  "north east": "NE",
+  "n w": "NW",
+  "north west": "NW",
+  "s e": "SE",
+  "south east": "SE",
+  "s w": "SW",
+  "south west": "SW",
+};
+
+const COMPASS_FULL: Record<string, string> = {
+  N: "North",
+  S: "South",
+  E: "East",
+  W: "West",
+  NE: "Northeast",
+  NW: "Northwest",
+  SE: "Southeast",
+  SW: "Southwest",
+};
+
+function compassKey(token: string): string {
+  return token.toLowerCase().replace(/[^a-z]/g, "");
+}
+
+/** "Southeast", "SE", and "S.E." are the quadrant SE. Fort and street suffixes are not. */
+export function compassAbbrev(token: string): string | null {
+  return COMPASS_TO_ABBREV[compassKey(token)] ?? null;
+}
+
+/** "South" + "East" is SE. "South" + "Central" is not a quadrant. */
+export function compassPairAbbrev(a: string, b: string): string | null {
+  return COMPASS_PAIRS[`${compassKey(a)} ${compassKey(b)}`] ?? null;
+}
+
+/** Canonical abbrev back to the spelled quadrant: "SE" → "Southeast". */
+export function compassFull(abbrev: string): string | null {
+  return COMPASS_FULL[abbrev.toUpperCase()] ?? null;
+}
+
 const STREET_TYPE_ABBREV: Record<string, string> = {
   street: "st",
   avenue: "ave",

@@ -147,8 +147,73 @@ test("selected Bartow search falls back when the abbreviated city query misses",
     const result = await new PermitStackProvider("test-key").search({
       mode: "address", q: "605 South Central Avenue", city: "Bartow", state: "FL", zip: "33830",
     });
-    assert.deepEqual(seen.map((url) => url.searchParams.get("address")), ["605 S Central Ave", "Central"]);
+    assert.deepEqual(seen.map((url) => url.searchParams.get("address")), ["605 S Central Ave", "605 Central Ave", "605 South Central Ave", "Central"]);
     assert.deepEqual(result.permits.map((p) => p.permitNumber), ["BT-1"]);
+  } finally {
+    restore();
+  }
+});
+
+test("141 Browning Circle Southeast searches the street without the quadrant and with it in front", async () => {
+  const seen: string[] = [];
+  const browning = (partial: Record<string, unknown>) => stackRow({
+    address_city: "WINTER HAVEN",
+    address_zip: "33884",
+    jurisdiction_name: "City of Winter Haven",
+    ...partial,
+  });
+  const restore = mockFetch((url) => {
+    const address = url.searchParams.get("address") ?? "";
+    seen.push(address);
+    assert.equal(url.searchParams.get("city"), "Winter Haven");
+    assert.equal(url.searchParams.get("zip_code"), null);
+    assert.equal(url.searchParams.get("state"), "FL");
+    if (address === "141 Browning" || address === "141 Browning Cir") {
+      return {
+        body: {
+          results: [
+            browning({ id: "aaaaaaa1-1111-4111-8111-111111111111", permit_number: "BT-2024-4680", address_street: "141 BROWNING CIR", description_raw: "HVAC CHANGEOUT", date_issued: "2024-03-21" }),
+            browning({ id: "aaaaaaa2-2222-4222-8222-222222222222", permit_number: "BT-2022-1905", address_street: "141 BROWNING CIR", description_raw: "Reroof: Shingle", date_issued: "2022-02-04" }),
+            browning({ id: "aaaaaaa3-3333-4333-8333-333333333333", permit_number: "NE-OTHER", address_street: "141 NE BROWNING CIR", date_issued: "2019-01-01" }),
+            browning({ id: "aaaaaaa4-4444-4444-8444-444444444444", permit_number: "BT-OTHER-CITY", address_street: "141 BROWNING CIR", address_city: "BARTOW", jurisdiction_name: "City of Bartow", date_issued: "2018-01-01" }),
+          ],
+          total: 4,
+          page: 1,
+          per_page: 100,
+        },
+      };
+    }
+    if (/^141 (SE|Southeast) Browning( Cir)?$/.test(address)) {
+      return {
+        body: {
+          results: [
+            browning({ id: "aaaaaaa5-5555-4555-8555-555555555555", permit_number: "BLD-H-148765", address_street: "141 SE BROWNING CIR", description_raw: "replace 15 windows", date_issued: "2011-09-19" }),
+          ],
+          total: 1,
+          page: 1,
+          per_page: 100,
+        },
+      };
+    }
+    return { body: { results: [], total: 0, page: 1, per_page: 100 } };
+  });
+  try {
+    const result = await new PermitStackProvider("test-key").search({
+      mode: "address",
+      q: "141 Browning Circle Southeast",
+      city: "Winter Haven",
+      state: "FL",
+      zip: "33884",
+      county: "Polk",
+    });
+    assert.deepEqual(result.permits.map((permit) => permit.permitNumber).sort(), ["BLD-H-148765", "BT-2022-1905", "BT-2024-4680"]);
+    assert.equal(seen[0], "141 Browning");
+    assert.ok(seen.includes("141 Browning Cir"));
+    assert.ok(seen.includes("141 SE Browning Cir"));
+    assert.ok(seen.includes("141 Southeast Browning Cir"));
+    assert.equal(seen.includes("141 Browning Circle Southeast"), false);
+    assert.equal(result.permits.some((permit) => permit.permitNumber === "NE-OTHER"), false);
+    assert.equal(result.permits.some((permit) => permit.permitNumber === "BT-OTHER-CITY"), false);
   } finally {
     restore();
   }
