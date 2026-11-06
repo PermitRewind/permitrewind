@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --conditions=react-server --import tsx --test src/lib/coverage.test.ts src/lib/address.test.ts src/lib/providers/search-coverage.test.ts src/lib/providers/davenport-iworq.test.ts src/lib/providers/davenport-harvest.test.ts",
+    "test": "node --conditions=react-server --import tsx --test src/lib/coverage.test.ts src/lib/address.test.ts src/lib/streetview.test.ts src/lib/providers/search-coverage.test.ts src/lib/providers/davenport-iworq.test.ts src/lib/providers/davenport-harvest.test.ts",
     "ingest:davenport": "tsx scripts/ingest-davenport-harvest.ts"
   },
   "dependencies": {

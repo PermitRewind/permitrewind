@@ -750,6 +750,8 @@ test("a ZIP with no geocoder locality is labeled with that ZIP's mailing city", 
   assert.equal(mailingCityFromZippopotam(null), null);
 
   const whitedove = {
+    lat: "28.0395",
+    lon: "-81.9498",
     address: {
       house_number: "3806",
       road: "Whitedove Drive",
@@ -807,7 +809,14 @@ test("a ZIP with no geocoder locality is labeled with that ZIP's mailing city", 
       assert.equal(suggestion.county, "Polk");
       assert.equal(suggestion.label, "3806 Whitedove Drive, Lakeland, FL 33812");
       assert.equal(suggestion.label.includes(", FL 33812") && suggestion.label.includes("Lakeland"), true);
-      assert.equal(evaluateAddressSubmission(suggestion.street, suggestion.token).ok, true);
+      assert.equal(suggestion.lat, 28.0395);
+      assert.equal(suggestion.lng, -81.9498);
+      const accepted = evaluateAddressSubmission(suggestion.street, suggestion.token);
+      assert.equal(accepted.ok, true);
+      if (accepted.ok) {
+        assert.equal(accepted.selection.lat, 28.0395);
+        assert.equal(accepted.selection.lng, -81.9498);
+      }
     }
     const again = await suggestFloridaAddresses("3806 Whitedove Drive", { minIntervalMs: 0, state });
     const zipAfterFirst = zipCalls;

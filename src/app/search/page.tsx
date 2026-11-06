@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { Metadata } from "next";
 import SearchForm from "@/components/SearchForm";
 import ResultsActions from "@/components/ResultsActions";
+import StreetViewPhoto from "@/components/StreetViewPhoto";
 import { getProvider } from "@/lib/providers";
 import { CITY_SUGGESTIONS, COVERAGE_NOTE, DEFAULT_COUNTY, DEFAULT_REGION, PERMIT_CATEGORIES, PERMIT_STATUSES } from "@/lib/jurisdictions";
 import { ADDRESS_SUGGEST_MIN_CHARS } from "@/lib/address-normalize";
@@ -10,6 +11,7 @@ import { Permit, ProviderError, SearchMode, SearchQuery, SearchResult } from "@/
 import { shownPermitCity } from "@/lib/address";
 import { bestDate, finalDate, fmtDate, fmtLabel, permitLocationLines, resultsDisplayCity, resultsPlaceLabel, sourceAttribution, statusColor } from "@/lib/format";
 import { permitLinkTarget } from "@/lib/permit-link";
+import { previewStreetView, propertyStreetViewAddress } from "@/lib/streetview";
 
 export const metadata: Metadata = { title: "Search results" };
 
@@ -43,6 +45,23 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
     ? evaluateAddressSubmission(query.q, one(sp.sel))
     : null;
   const addressBlocked = addressGate !== null && !addressGate.ok;
+  const selection = addressGate?.ok ? addressGate.selection : null;
+  const propertyAddress = selection
+    ? propertyStreetViewAddress({
+        street: selection.street,
+        city: query.city || selection.city,
+        state: query.state || selection.state,
+        zip: query.zip || selection.zip,
+      })
+    : "";
+  // One photo for this address. Metadata runs beside the permit search.
+  // The image itself loads from /api/streetview so the Google key stays on the server.
+  const streetViewPromise = selection && propertyAddress
+    ? previewStreetView({ address: propertyAddress, lat: selection.lat, lng: selection.lng }).catch(() => ({
+        available: false as const,
+        src: null,
+      }))
+    : null;
   if (query.q.trim().length >= 2 && !addressBlocked) {
     try {
       result = await getProvider().search(query);
@@ -51,6 +70,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
       console.error("search failed", e);
     }
   }
+  const streetView = streetViewPromise ? await streetViewPromise : null;
 
   const showOther = one(sp.other) !== "hide";
   if (result) {
@@ -69,6 +89,13 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
   const placeLabel = resultsPlaceLabel({ q: query.q, city: query.city }, result?.permits ?? []);
   const sel = "w-full min-w-0 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900";
   const modeLabel = { address: "Address", parcel: "Parcel", permit: "Permit #" }[mode];
+  const propertyPhoto = selection && propertyAddress && (result || error) ? (
+    <PropertyStreetView
+      address={propertyAddress}
+      available={streetView?.available === true}
+      src={streetView?.available ? streetView.src : null}
+    />
+  ) : null;
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-6">
@@ -141,15 +168,21 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
       ) : query.q.trim().length < 2 ? (
         <State title="Search too short" body="Please enter at least 2 characters." />
       ) : error ? (
-        <State tone="error" title="We couldn't complete that search" body={error} />
+        <>
+          {propertyPhoto ? <div className="mt-6">{propertyPhoto}</div> : null}
+          <State tone="error" title="We couldn't complete that search" body={error} />
+        </>
       ) : result && (
         <section className="mt-6">
-          <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-            <h1 className="text-lg font-semibold text-neutral-950">
-              {result.permits.length} permit{result.permits.length === 1 ? "" : "s"} for <span className="text-brand-600">&ldquo;{placeLabel}&rdquo;</span>
-              {result.total != null && result.total > result.permits.length && <span className="text-sm font-normal text-slate-500"> (showing first {result.permits.length} of {result.total})</span>}
-            </h1>
-            <ResultsActions permits={result.permits} filename={`permits-${query.q.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.csv`} />
+          <div className={`mb-3 flex gap-2 ${propertyPhoto ? "flex-col md:flex-row md:items-start md:gap-4" : "flex-wrap items-center justify-between"}`}>
+            {propertyPhoto}
+            <div className={`flex min-w-0 flex-wrap items-center justify-between gap-2 ${propertyPhoto ? "flex-1" : "w-full"}`}>
+              <h1 className="text-lg font-semibold text-neutral-950">
+                {result.permits.length} permit{result.permits.length === 1 ? "" : "s"} for <span className="text-brand-600">&ldquo;{placeLabel}&rdquo;</span>
+                {result.total != null && result.total > result.permits.length && <span className="text-sm font-normal text-slate-500"> (showing first {result.permits.length} of {result.total})</span>}
+              </h1>
+              <ResultsActions permits={result.permits} filename={`permits-${query.q.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.csv`} />
+            </div>
           </div>
           {otherCount > 0 && (
             <p className="mb-3 text-sm text-slate-600">{showOther ? `Includes ${otherCount} other record(s) (e.g. lien/permit search requests), labeled "Other record". Use the Other records filter to hide them.` : `${otherCount} other record(s) (lien/permit search requests) hidden by filter.`}</p>
@@ -214,6 +247,23 @@ function PermitLink({ p, className }: { p: Permit; className: string }) {
   if (target.kind === "internal") return <Link className={className} href={target.href}>{label}</Link>;
   if (target.kind === "external") return <a className={className} href={target.href} target="_blank" rel="noopener noreferrer">{label} ↗</a>;
   return <span>{label}</span>;
+}
+
+function PropertyStreetView({ address, available, src }: { address: string; available: boolean; src: string | null }) {
+  return (
+    <figure className="w-full max-w-sm overflow-hidden break-inside-avoid rounded-xl border border-slate-200 border-t-4 border-t-brand-600 bg-white shadow-sm md:w-80 md:shrink-0">
+      {available && src ? (
+        <StreetViewPhoto src={src} address={address} />
+      ) : (
+        <div className="flex aspect-video items-center justify-center bg-neutral-100 px-4 text-center">
+          <p className="text-sm font-medium text-neutral-700">No street view available</p>
+        </div>
+      )}
+      <figcaption className="border-t border-slate-100 px-3 py-2 text-xs text-slate-500">
+        Street view of <span className="font-medium text-neutral-800">{address}</span>
+      </figcaption>
+    </figure>
+  );
 }
 
 function State({ title, body, tone }: { title: string; body: string; tone?: "error" }) {
