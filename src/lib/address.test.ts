@@ -6,7 +6,8 @@ import { GET } from "../app/api/address-suggest/route";
 import { GET as searchGET } from "../app/api/search/route";
 import { addressStreetForms, cityPreference, hardCity, parseAddressQuery, permitAddressMatches, permitAddressQueries, selectPermitsByCity, shownPermitCity, suffixEquivalents, toPermitStackAddress } from "./address";
 import { addedStreetTypeKind, isAddressSearchEnabled, mergeAddressSuggestResponse, reduceComboboxKey } from "./address-combobox";
-import { abbreviateAddress, ADDRESS_SUGGEST_DEBOUNCE_MS, ADDRESS_SUGGEST_LIMIT, ADDRESS_SUGGEST_MIN_CHARS, STREET_TYPE_FALLBACK_CAP, addressQueryVariants, correctFuzzyCity, expandAddress, highlightAddressLabel, intendedCity, stemStreetTokens, stemTrailingS, streetNameForms, streetNamesMatch } from "./address-normalize";
+import { abbreviateAddress, ADDRESS_SUGGEST_DEBOUNCE_MS, ADDRESS_SUGGEST_LIMIT, ADDRESS_SUGGEST_MIN_CHARS, STREET_TYPE_FALLBACK_CAP, addressQueryVariants, canonicalAddressCase, correctFuzzyCity, expandAddress, highlightAddressLabel, intendedCity, sameAddressCase, stemStreetTokens, stemTrailingS, streetNameForms, streetNamesMatch } from "./address-normalize";
+import { CITY_SUGGESTIONS } from "./jurisdictions";
 import { evaluateAddressSubmission, signAddressSelection } from "./address-selection";
 import { FLORIDA_VIEWBOX, nominatimQueryPlan, rankAddressSuggestions, resetAddressSuggestState, suggestFloridaAddresses, suggestionFromNominatim, suggestionQueryPlan } from "./address-suggest";
 import { permitLocationLines, resultsDisplayCity, resultsPlaceLabel } from "./format";
@@ -1166,6 +1167,232 @@ test("a house number and street name suggest suffixed roads before a street type
       assert.ok(queries.some((q) => /\bwhitedove drive\b/i.test(q)));
       assert.equal(queries.some((q) => /\blane\b/i.test(q)), false);
     }
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("the same letters in any case produce the same suggestions and the signed search still matches", { concurrency: false }, async () => {
+  for (const city of CITY_SUGGESTIONS) {
+    assert.equal(canonicalAddressCase(city), city, city);
+    assert.equal(canonicalAddressCase(city.toUpperCase()), city, city);
+    assert.equal(canonicalAddressCase(city.toLowerCase()), city, city);
+  }
+  assert.equal(canonicalAddressCase("SOUTHEAST"), canonicalAddressCase("southeast"));
+  assert.equal(canonicalAddressCase("Southeast"), "Southeast");
+  assert.equal(canonicalAddressCase("SE"), canonicalAddressCase("se"));
+  assert.equal(canonicalAddressCase("Se"), "SE");
+  assert.equal(canonicalAddressCase("CIR"), canonicalAddressCase("cir"));
+  assert.equal(canonicalAddressCase("Cir"), "Cir");
+  assert.equal(canonicalAddressCase("DR"), canonicalAddressCase("dr"));
+  assert.equal(canonicalAddressCase("Dr"), "Dr");
+  assert.equal(canonicalAddressCase("WhiteDove"), canonicalAddressCase("WHITEDOVE"));
+  assert.equal(canonicalAddressCase("whitedove"), "Whitedove");
+  assert.equal(canonicalAddressCase("123 NE 1st Ave"), canonicalAddressCase("123 ne 1ST ave"));
+  assert.equal(canonicalAddressCase("123 NE 1st Ave"), "123 NE 1st Ave");
+  assert.equal(sameAddressCase("141 Browning Circle Southeast", "141 BROWNING CIRCLE SOUTHEAST"), true);
+  assert.equal(sameAddressCase("141 Browning Circle Southeast", "141 Browning Circle Southwest"), false);
+
+  const foldPlan = (query: string) => suggestionQueryPlan(query).map((line) => line.toLowerCase().replace(/\s+/g, " ").trim());
+  const samePlan = (queries: string[]) => {
+    const [first, ...rest] = queries.map(foldPlan);
+    for (const plan of rest) assert.deepEqual(plan, first);
+  };
+  samePlan(["141 Browning Circle Southeast", "141 BROWNING CIRCLE SOUTHEAST", "141 browning circle southeast"]);
+  samePlan(["141 Browning Cir", "141 BROWNING CIR", "141 browning cir", "141 browning CIR"]);
+  samePlan(["3838 Whitedove", "3838 WhiteDove", "3838 WHITEDOVE", "3838 whitedove"]);
+  samePlan(["3838 Whitedove Dr", "3838 WHITEDOVE DR", "3838 whitedove drive", "3838 WhiteDove Dr"]);
+  samePlan(["605 S Central Ave Bartow", "605 s CENTRAL ave bartow", "605 SOUTH CENTRAL AVENUE BARTOW"]);
+
+  const browning = {
+    address: {
+      house_number: "141",
+      road: "Browning Circle Southeast",
+      city: "Winter Haven",
+      county: "Polk County",
+      state: "Florida",
+      postcode: "33884",
+    },
+  };
+  const dove = {
+    address: {
+      house_number: "3838",
+      road: "Whitedove Drive",
+      city: "Lakeland",
+      county: "Polk County",
+      state: "Florida",
+      postcode: "33812",
+    },
+  };
+  const central = {
+    address: {
+      house_number: "605",
+      road: "South Central Avenue",
+      city: "Bartow",
+      county: "Polk County",
+      state: "Florida",
+      postcode: "33830",
+    },
+  };
+  const title = {
+    address: {
+      house_number: "3533",
+      road: "Sam Allen Oaks Circle",
+      city: "Plant City",
+      county: "Hillsborough County",
+      state: "Florida",
+      postcode: "33563",
+    },
+  };
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url);
+    const q = (url.searchParams.get("q") ?? "").toLowerCase();
+    const hit = /sam allen/.test(q)
+      ? title
+      : /browning/.test(q)
+        ? browning
+        : /white ?dove/.test(q) && /\b(drive|dr)\b/.test(q)
+          ? dove
+          : /central/.test(q)
+            ? central
+            : null;
+    return new Response(JSON.stringify(hit ? [hit] : []), { status: 200, headers: { "Content-Type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    async function labelsFor(queries: string[]) {
+      const labels: string[][] = [];
+      for (const typed of queries) {
+        const result = await suggestFloridaAddresses(typed, { minIntervalMs: 0, state: { lastAt: 0, cache: new Map() } });
+        assert.equal(result.status, "ok", typed);
+        labels.push(result.suggestions.map((row) => row.label));
+      }
+      for (const row of labels) assert.deepEqual(row, labels[0]);
+      return labels[0];
+    }
+    assert.deepEqual(await labelsFor([
+      "3533 Sam Allen Oaks Circle, Plant City",
+      "3533 SAM ALLEN OAKS CIRCLE, PLANT CITY",
+      "3533 sam allen oaks circle, plant city",
+    ]), ["3533 Sam Allen Oaks Circle, Plant City, FL 33563"]);
+    const browningLabels = await labelsFor([
+      "141 Browning Circle Southeast",
+      "141 BROWNING CIRCLE SOUTHEAST",
+      "141 browning circle southeast",
+      "141 Browning Cir",
+      "141 BROWNING CIR",
+      "141 browning cir",
+      "141 browning CIR",
+    ]);
+    assert.deepEqual(browningLabels, ["141 Browning Circle Southeast, Winter Haven, FL 33884"]);
+    assert.deepEqual(await labelsFor([
+      "3838 Whitedove",
+      "3838 WhiteDove",
+      "3838 WHITEDOVE",
+      "3838 whitedove",
+      "3838 Whitedove Dr",
+      "3838 WHITEDOVE DR",
+      "3838 whitedove dr",
+      "3838 WhiteDove Drive",
+    ]), ["3838 Whitedove Drive, Lakeland, FL 33812"]);
+    assert.deepEqual(await labelsFor([
+      "605 S Central Ave Bartow",
+      "605 s CENTRAL ave bartow",
+      "605 SOUTH CENTRAL AVENUE BARTOW",
+    ]), ["605 South Central Avenue, Bartow, FL 33830"]);
+
+    const capsParts = highlightAddressLabel(browningLabels[0], "141 BROWNING CIR");
+    const capsMatched = capsParts.filter((part) => part.match).map((part) => part.text);
+    assert.ok(capsMatched.includes("141"));
+    assert.ok(capsMatched.includes("Browning"));
+    assert.ok(capsMatched.includes("Circle"));
+    const driveParts = highlightAddressLabel("3838 Whitedove Drive, Lakeland, FL 33812", "3838 WHITEDOVE DR");
+    assert.ok(driveParts.some((part) => part.match && part.text === "Whitedove"));
+    assert.ok(driveParts.some((part) => part.match && part.text === "Drive"));
+    const doveParts = highlightAddressLabel("3838 Whitedove Drive, Lakeland, FL 33812", "3838 WhiteDove");
+    assert.ok(doveParts.some((part) => part.match && part.text === "Whitedove"));
+
+    const kept = {
+      query: "141 Browning Cir",
+      suggestions: [{ label: browningLabels[0] }],
+      status: "ok",
+    };
+    for (const typed of ["141 BROWNING CIR", "141 browning cir", "141 browning CIR"]) {
+      const merged = mergeAddressSuggestResponse(kept, { query: typed, suggestions: [], status: "throttled" });
+      assert.equal(merged.suggestions.length, 1, typed);
+      assert.equal(merged.status, "ok");
+      assert.equal((merged.suggestions[0] as { label: string }).label, browningLabels[0]);
+    }
+    const emptySameLetters = mergeAddressSuggestResponse(kept, { query: "141 BROWNING CIR", suggestions: [], status: "empty" });
+    assert.equal(emptySameLetters.suggestions.length, 1);
+  } finally {
+    globalThis.fetch = original;
+  }
+
+  globalThis.fetch = (async () => new Response(JSON.stringify([]), { status: 200, headers: { "Content-Type": "application/json" } })) as typeof fetch;
+  try {
+    const echoed = [
+      "9999 Nowhere Rd Bartow",
+      "9999 NOWHERE RD BARTOW",
+      "9999 nowhere rd bartow",
+    ];
+    const fallbackLabels: string[] = [];
+    for (const typed of echoed) {
+      const result = await suggestFloridaAddresses(typed, { minIntervalMs: 0, state: { lastAt: 0, cache: new Map() } });
+      assert.equal(result.status, "ok", typed);
+      fallbackLabels.push(result.suggestions[0].label);
+      assert.equal(result.suggestions[0].city, "Bartow");
+    }
+    assert.deepEqual(fallbackLabels, ["9999 Nowhere Rd, Bartow, FL", "9999 Nowhere Rd, Bartow, FL", "9999 Nowhere Rd, Bartow, FL"]);
+    const places = [
+      "10 Oak Street, Highland City, FL 33812",
+      "10 OAK STREET, HIGHLAND CITY, FL 33812",
+      "10 oak street, highland city, fl 33812",
+    ];
+    const placeLabels: string[] = [];
+    for (const typed of places) {
+      const result = await suggestFloridaAddresses(typed, { minIntervalMs: 0, state: { lastAt: 0, cache: new Map() } });
+      placeLabels.push(result.suggestions[0].label);
+      assert.equal(result.suggestions[0].city, "Highland City");
+    }
+    assert.equal(new Set(placeLabels).size, 1);
+    assert.equal(placeLabels[0], "10 Oak Street, Highland City, FL 33812");
+  } finally {
+    globalThis.fetch = original;
+  }
+
+  const picked = {
+    label: "141 Browning Circle Southeast, Winter Haven, FL 33884",
+    street: "141 Browning Circle Southeast",
+    city: "Winter Haven" as const,
+    state: "FL" as const,
+    zip: "33884",
+  };
+  process.env.ADDRESS_SELECTION_SECRET = "test-selection-secret";
+  const token = signAddressSelection(picked);
+  for (const typed of [picked.street, picked.street.toUpperCase(), picked.street.toLowerCase(), "141 Browning CIRCLE Southeast"]) {
+    assert.equal(evaluateAddressSubmission(typed, token).ok, true, typed);
+    assert.equal(isAddressSearchEnabled({ mode: "address", text: typed, selected: { label: picked.street, token } }), true, typed);
+    assert.equal(permitAddressMatches(parseAddressQuery(typed), { address: "141 BROWNING CIR SE", city: "WINTER HAVEN" }, "Winter Haven"), true, typed);
+  }
+  assert.equal(evaluateAddressSubmission(picked.label, token).ok, false);
+  assert.equal(evaluateAddressSubmission("142 Browning Circle Southeast", token).ok, false);
+  assert.equal(evaluateAddressSubmission(picked.street, null).ok, false);
+  assert.equal(isAddressSearchEnabled({ mode: "address", text: `${picked.street} x`, selected: { label: picked.street, token } }), false);
+  assert.equal(isAddressSearchEnabled({ mode: "address", text: picked.street.toUpperCase(), selected: { label: picked.street, token: "" } }), false);
+
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls += 1;
+    return new Response(JSON.stringify({ results: [], total: 0, page: 1, per_page: 100 }), { status: 200, headers: { "Content-Type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    process.env.PERMITSTACK_API_KEY = "test-key";
+    const accepted = await searchGET(new NextRequest(`http://localhost/api/search?mode=address&q=${encodeURIComponent(picked.street.toUpperCase())}&sel=${encodeURIComponent(token)}`));
+    assert.equal(accepted.status, 200);
+    assert.ok(calls > 0);
+    const blocked = await searchGET(new NextRequest(`http://localhost/api/search?mode=address&q=${encodeURIComponent(picked.street.toUpperCase())}`));
+    assert.equal(blocked.status, 422);
   } finally {
     globalThis.fetch = original;
   }

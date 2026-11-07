@@ -4,6 +4,7 @@ import type { PermitProvider } from "./types";
 import { parseAddress } from "./polk-accela";
 import { solveDavenportCaptcha, DAVENPORT_PORTAL_PAGE } from "./davenport-captcha";
 import { loadHarvest, lookupHarvest, toPermit } from "./davenport-harvest";
+import { foldAddressCase } from "../address-normalize";
 import { localityFromQuery, trailingKnownCity } from "../jurisdictions";
 import { Permit, ProviderError, SearchQuery, SearchResult } from "../types";
 
@@ -250,10 +251,10 @@ function applyDetail(permit: Permit, detail: DavenportDetail): void {
 function addressKeeps(query: string, site: string | null): boolean {
   if (!site) return false;
   const { number, street } = parseAddress(query);
-  const line = site.toUpperCase();
-  if (number && !new RegExp(`^${number}\\b`).test(line)) return false;
+  const line = foldAddressCase(site);
+  if (number && !new RegExp(`^${foldAddressCase(number)}\\b`).test(line)) return false;
   const token = street?.split(" ")[0];
-  if (token && !line.includes(token)) return false;
+  if (token && !line.includes(foldAddressCase(token))) return false;
   return true;
 }
 

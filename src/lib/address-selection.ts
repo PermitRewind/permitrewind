@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { parseAddressQuery } from "./address";
+import { sameAddressCase } from "./address-normalize";
 
 /** Shown when an address was not chosen from the suggestion list. */
 export const ADDRESS_SELECTION_MESSAGE =
@@ -94,12 +95,12 @@ export interface AddressRejection {
   message: string;
 }
 
-/** Accept only a signed suggestion for this street. City, ZIP, and county may be edited after the pick. */
+/** Accept only a signed suggestion for this street. Letter case does not count. City, ZIP, and county may be edited after the pick. */
 export function evaluateAddressSubmission(q: string, token: string | null | undefined, now = Date.now()): AddressSubmission | AddressRejection {
   const streetText = q.trim();
   const parsed = parseAddressQuery(streetText);
   const selection = readAddressSelection(token, now);
-  if (!selection || selection.street !== streetText || !parsed.number || !parsed.streetName) {
+  if (!selection || !sameAddressCase(selection.street, streetText) || !parsed.number || !parsed.streetName) {
     return { ok: false, message: ADDRESS_SELECTION_MESSAGE };
   }
   const street = parseAddressQuery(selection.street);

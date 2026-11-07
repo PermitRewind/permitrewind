@@ -1,6 +1,6 @@
-import { isCompleteStreetTypeToken, isIncompleteStreetTypeToken } from "./address-normalize";
+import { foldAddressCase, isCompleteStreetTypeToken, isIncompleteStreetTypeToken, sameAddressCase } from "./address-normalize";
 
-/** Search stays disabled in address mode until this exact text was picked from the list. */
+/** Search stays disabled in address mode until this text was picked from the list. Letter case does not count. */
 export function isAddressSearchEnabled(input: {
   mode: "address" | "parcel" | "permit";
   text: string;
@@ -9,7 +9,7 @@ export function isAddressSearchEnabled(input: {
   const text = input.text.trim();
   if (!text) return false;
   if (input.mode !== "address") return true;
-  return !!input.selected?.token && input.selected.label === text;
+  return !!input.selected?.token && sameAddressCase(input.selected.label, text);
 }
 
 export interface ComboState {
@@ -50,7 +50,7 @@ export function reduceComboboxKey(state: ComboState, key: string): ComboAction {
 }
 
 function normSuggestQuery(value: string): string {
-  return value.trim().replace(/\s+/g, " ").toLowerCase();
+  return foldAddressCase(value).replace(/\s+/g, " ");
 }
 
 /**
@@ -76,15 +76,24 @@ function isSuggestExtension(previousQuery: string, nextQuery: string): boolean {
 }
 
 /**
- * Keep the last good rows when the next keystrokes are an unfinished street
- * type, or when the map is throttled on a longer version of the same line.
- * A finished type that comes back empty replaces the list.
+ * Keep the last good rows when the next text is the same letters in another
+ * case, when the next keystrokes are an unfinished street type, or when the
+ * map is throttled on a longer version of the same line. A finished type that
+ * comes back empty replaces the list.
  */
 export function mergeAddressSuggestResponse<T extends { query: string; suggestions: readonly unknown[]; status: string }>(
   previous: T | null,
   next: T,
 ): T {
   if (next.suggestions.length > 0 || !previous?.suggestions.length) return next;
+  if (normSuggestQuery(previous.query) === normSuggestQuery(next.query)) {
+    return {
+      ...next,
+      query: previous.query,
+      suggestions: previous.suggestions,
+      status: "ok" as T["status"],
+    };
+  }
   const kind = addedStreetTypeKind(previous.query, next.query);
   const keepIncomplete = kind === "incomplete" && (next.status === "empty" || next.status === "throttled" || next.status === "unavailable");
   const keepBusy = isSuggestExtension(previous.query, next.query) && (next.status === "throttled" || next.status === "unavailable");
