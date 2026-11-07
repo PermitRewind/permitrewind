@@ -3,6 +3,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import AddressSuggestInput from "@/components/AddressSuggestInput";
 import { isAddressSearchEnabled } from "@/lib/address-combobox";
+import { sameAddressCase } from "@/lib/address-normalize";
 import type { AddressSuggestion } from "@/lib/address-suggest";
 import { DEFAULT_COUNTY, FLORIDA_COUNTIES } from "@/lib/jurisdictions";
 import type { SearchMode } from "@/lib/types";
@@ -48,7 +49,7 @@ export default function SearchForm({
   const [q, setQ] = useState(initialQ);
   const [pending, setPending] = useState(false);
   const [selected, setSelected] = useState<{ label: string; token: string } | null>(
-    initialSelection && initialSelection.label === initialQ.trim() ? initialSelection : null,
+    initialSelection && sameAddressCase(initialSelection.label, initialQ) ? initialSelection : null,
   );
   const [city, setCity] = useState(initialCity);
   const [state, setState] = useState(initialState || "FL");
@@ -88,7 +89,7 @@ export default function SearchForm({
 
   function onAddressChange(text: string) {
     setQ(text);
-    setSelected((cur) => (cur && cur.label === text.trim() ? cur : null));
+    setSelected((cur) => (cur && sameAddressCase(cur.label, text) ? cur : null));
   }
 
   function onAddressSelect(suggestion: AddressSuggestion) {

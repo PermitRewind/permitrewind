@@ -1,6 +1,6 @@
 import { signAddressSelection } from "./address-selection";
 import { parseAddressQuery, queryWithoutIncompleteStreetType, splitStreetUnit, streetLineWithoutLocality } from "./address";
-import { ADDRESS_SUGGEST_LIMIT, ADDRESS_SUGGEST_MIN_CHARS, STREET_TYPE_FALLBACK_CAP, STREET_TYPE_FALLBACKS, addressQueryVariants, citiesNear, compassFull, expandAddress, intendedCity, isSubstantialStreetToken, streetNameForms, streetTokenRank } from "./address-normalize";
+import { ADDRESS_SUGGEST_LIMIT, ADDRESS_SUGGEST_MIN_CHARS, STREET_TYPE_FALLBACK_CAP, STREET_TYPE_FALLBACKS, addressQueryVariants, canonicalAddressCase, citiesNear, compassFull, expandAddress, foldAddressCase, intendedCity, isSubstantialStreetToken, sameAddressCase, streetNameForms, streetTokenRank } from "./address-normalize";
 import { isPolkCity } from "./jurisdictions";
 import { mailingCitiesForZips, resetZipLocalityCache } from "./zip-locality";
 
@@ -112,7 +112,7 @@ export function suggestionFromNominatim(hit: NominatimHit, typedQuery = ""): Add
   const nominatimCity = address.city || address.town || address.village || address.hamlet || address.municipality || null;
   const typedCity = intendedCity(typedQuery);
   // A city the visitor typed wins when Nominatim names a different place (Highland City vs Lakeland, Winter Haven vs Bartow).
-  const city = typedCity && nominatimCity && typedCity.toLowerCase() !== nominatimCity.toLowerCase()
+  const city = typedCity && nominatimCity && !sameAddressCase(typedCity, nominatimCity)
     ? typedCity
     : nominatimCity || typedCity;
   const zip = address.postcode?.match(/\d{5}/)?.[0] ?? null;
@@ -141,9 +141,9 @@ export function nominatimQueryPlan(raw: string): string[] {
   const parsed = parseAddressQuery(query);
   const street = streetLineWithoutLocality(query);
   const plan = [full];
-  if (parsed.city && street && street.toLowerCase() !== query.toLowerCase()) {
+  if (parsed.city && street && !sameAddressCase(street, query)) {
     const streetQuery = /\b(fl|florida)\b/i.test(street) ? street : `${street}, Florida`;
-    if (streetQuery.toLowerCase() !== full.toLowerCase()) plan.push(streetQuery);
+    if (!sameAddressCase(streetQuery, full)) plan.push(streetQuery);
   }
   return plan;
 }
@@ -165,7 +165,7 @@ function streetTypeFallbackVariants(raw: string): string[] {
   const seen = new Set<string>();
   const push = (name: string, suffix: string) => {
     const text = line(name, suffix);
-    const key = text.toLowerCase();
+    const key = foldAddressCase(text);
     if (!text || seen.has(key)) return;
     seen.add(key);
     lines.push(text);
@@ -203,7 +203,7 @@ export function suggestionQueryPlan(raw: string): string[] {
   const add = (variant: string) => {
     let added = 0;
     for (const q of nominatimQueryPlan(variant)) {
-      const key = q.toLowerCase().replace(/\s+/g, " ").trim();
+      const key = foldAddressCase(q).replace(/\s+/g, " ");
       if (!key || seen.has(key)) continue;
       seen.add(key);
       plan.push(q);
@@ -253,15 +253,18 @@ function suggestionFromTyped(raw: string): AddressSuggestion | null {
   if (!parsed.number || !parsed.streetName || !parsed.city) return null;
   const split = splitStreetUnit(streetLineWithoutLocality(raw));
   if (!split.street) return null;
+  const street = canonicalAddressCase(split.street);
+  const city = canonicalAddressCase(parsed.city);
   const zip = parsed.zip;
-  const label = [split.street, parsed.city, ["FL", zip].filter(Boolean).join(" ")].filter(Boolean).join(", ");
+  const unitNumber = split.unitNumber ? canonicalAddressCase(split.unitNumber) : null;
+  const label = [street, city, ["FL", zip].filter(Boolean).join(" ")].filter(Boolean).join(", ");
   const token = signAddressSelection({
-    label, street: split.street, city: parsed.city, state: "FL", zip, county: null,
-    unitType: split.unitType, unitNumber: split.unitNumber,
+    label, street, city, state: "FL", zip, county: null,
+    unitType: split.unitType, unitNumber,
   });
   return {
-    label, street: split.street, city: parsed.city, state: "FL", zip, county: null,
-    unitType: split.unitType, unitNumber: split.unitNumber, token,
+    label, street, city, state: "FL", zip, county: null,
+    unitType: split.unitType, unitNumber, token,
   };
 }
 
@@ -272,9 +275,9 @@ function nominatimLocality(hit: NominatimHit): string | null {
 }
 
 function queryIncludesCity(q: string, city: string): boolean {
-  const needle = city.toLowerCase().replace(/\./g, "").replace(/\s+/g, " ").trim();
+  const needle = foldAddressCase(city).replace(/\./g, "").replace(/\s+/g, " ");
   if (!needle) return false;
-  return q.toLowerCase().replace(/\./g, "").replace(/\s+/g, " ").includes(needle);
+  return foldAddressCase(q).replace(/\./g, "").replace(/\s+/g, " ").includes(needle);
 }
 
 /** Blank locality counts as a match so a house with no city tag can take the typed city. */
@@ -348,7 +351,7 @@ export async function suggestFloridaAddresses(
 ): Promise<AddressSuggestResponse> {
   const query = raw.trim().slice(0, 120);
   const state = opts?.state ?? shared;
-  const key = query.toLowerCase().replace(/\s+/g, " ");
+  const key = foldAddressCase(query).replace(/\s+/g, " ");
   if (query.length < ADDRESS_SUGGEST_MIN_CHARS) return empty(query, "empty");
   const cached = state.cache.get(key);
   if (cached) return { ...cached, query };
@@ -407,7 +410,7 @@ export async function suggestFloridaAddresses(
       for (const hit of body) {
         const suggestion = suggestionFromNominatim(hit, query);
         if (!suggestion) continue;
-        const id = suggestion.label.toLowerCase();
+        const id = foldAddressCase(suggestion.label);
         if (seen.has(id)) continue;
         seen.add(id);
         const agrees = hitAgrees(hit, typedCity);

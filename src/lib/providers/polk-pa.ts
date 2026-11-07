@@ -6,7 +6,7 @@ import type { PermitProvider } from "./types";
 import { Permit, SearchQuery, SearchResult } from "../types";
 import { parseAddress } from "./polk-accela";
 import { parseAddressQuery, permitAddressMatches } from "../address";
-import { streetNameForms, streetNamesMatch } from "../address-normalize";
+import { foldAddressCase, sameAddressCase, streetNameForms, streetNamesMatch } from "../address-normalize";
 import { shouldMergePolkSources } from "../jurisdictions";
 
 /**
@@ -87,8 +87,12 @@ export class PolkPAProvider implements PermitProvider {
         const forms = streetNameForms(street);
         recs = (await loadShard(`addr-${key}`)).filter((r) => {
           const stored = r[12];
-          const sameStreet = forms.some((form) => stored === form || stored.startsWith(form + " ") || streetNamesMatch(stored, form));
-          return sameStreet && (!number || r[10] === number);
+          const sameStreet = forms.some((form) => {
+            const left = foldAddressCase(stored);
+            const right = foldAddressCase(form);
+            return left === right || left.startsWith(`${right} `) || streetNamesMatch(stored, form);
+          });
+          return sameStreet && (!number || sameAddressCase(r[10], number));
         });
       }
       const matched = recs.map(toPermit).filter((permit) => permitAddressMatches(parsed, permit, query.city));

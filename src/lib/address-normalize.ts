@@ -123,6 +123,40 @@ export function compassAbbrev(token: string): string | null {
   return COMPASS_TO_ABBREV[compassKey(token)] ?? null;
 }
 
+/**
+ * Letter case is not part of an address. Every compare of address text goes
+ * through `sameAddressCase`. A line we echo back, because the map did not
+ * standardize it, goes through `canonicalAddressCase` so any mix of upper
+ * and lower case is one label.
+ */
+export function foldAddressCase(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+/** True when both strings are the same address text aside from letter case. */
+export function sameAddressCase(a: string, b: string): boolean {
+  return foldAddressCase(a) === foldAddressCase(b);
+}
+
+/**
+ * One display spelling for a letter mix. Compass abbreviations stay uppercase
+ * ("SE", "se", and "Se" are "SE"). A letter glued to a house number stays an
+ * ordinal or a lot letter ("1ST" is "1st", "12a" is "12A"). Every other word
+ * is capitalized ("SOUTHEAST" and "southeast" are "Southeast"; "WHITEDOVE"
+ * and "WhiteDove" are "Whitedove").
+ */
+export function canonicalAddressCase(value: string): string {
+  return value.replace(/[A-Za-z]+/g, (word: string, offset: number, whole: string) => {
+    const lower = word.toLowerCase();
+    const prev = offset > 0 ? whole[offset - 1] : "";
+    if (/\d/.test(prev)) return lower.length === 1 ? lower.toUpperCase() : lower;
+    const abbrev = compassAbbrev(word);
+    if (abbrev && abbrev.toLowerCase() === lower) return abbrev;
+    if (lower.length === 1) return lower.toUpperCase();
+    return lower.charAt(0).toUpperCase() + lower.slice(1);
+  });
+}
+
 /** "South" + "East" is SE. "South" + "Central" is not a quadrant. */
 export function compassPairAbbrev(a: string, b: string): string | null {
   return COMPASS_PAIRS[`${compassKey(a)} ${compassKey(b)}`] ?? null;
@@ -811,7 +845,7 @@ export function addressQueryVariants(query: string): string[] {
 }
 
 function labelTokenMatches(text: string, forms: Set<string>): boolean {
-  const lower = text.toLowerCase();
+  const lower = foldAddressCase(text);
   if (HIGHLIGHT_SKIP.has(lower)) return false;
   if (forms.has(lower) || forms.has(stemTrailingS(lower))) return true;
   for (const form of forms) {
@@ -824,7 +858,7 @@ function labelTokenMatches(text: string, forms: Set<string>): boolean {
 export function highlightAddressLabel(label: string, query: string): { text: string; match: boolean }[] {
   const forms = new Set<string>();
   for (const variant of [query, ...addressQueryVariants(query)]) {
-    for (const token of variant.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)) {
+    for (const token of foldAddressCase(variant).split(/[^a-z0-9]+/).filter(Boolean)) {
       if (HIGHLIGHT_SKIP.has(token)) continue;
       if (token.length === 1 && !(token in DIRECTIONAL_EXPAND) && !/^\d$/.test(token)) continue;
       forms.add(token);
@@ -837,7 +871,7 @@ export function highlightAddressLabel(label: string, query: string): { text: str
       }
     }
   }
-  const typed = query.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  const typed = foldAddressCase(query).split(/[^a-z0-9]+/).filter(Boolean);
   for (let i = 0; i < typed.length - 1; i++) {
     if (STREET_OR_DIRECTION.has(typed[i]) || STREET_OR_DIRECTION.has(typed[i + 1])) continue;
     forms.add(typed[i] + typed[i + 1]);
