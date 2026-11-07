@@ -95,7 +95,7 @@ export interface AddressRejection {
   message: string;
 }
 
-/** Accept only a signed suggestion for this street. Letter case does not count. City, ZIP, and county may be edited after the pick. */
+/** Accept only a signed suggestion for this street. Letter case, a compass abbreviation, and a street-type abbreviation do not count. City, ZIP, and county may be edited after the pick. */
 export function evaluateAddressSubmission(q: string, token: string | null | undefined, now = Date.now()): AddressSubmission | AddressRejection {
   const streetText = q.trim();
   const parsed = parseAddressQuery(streetText);

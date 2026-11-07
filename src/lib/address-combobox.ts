@@ -1,6 +1,6 @@
-import { foldAddressCase, isCompleteStreetTypeToken, isIncompleteStreetTypeToken, sameAddressCase } from "./address-normalize";
+import { expandAddress, isCompleteStreetTypeToken, isIncompleteStreetTypeToken, sameAddressCase } from "./address-normalize";
 
-/** Search stays disabled in address mode until this text was picked from the list. Letter case does not count. */
+/** Search stays disabled in address mode until this text was picked from the list. Letter case, a compass abbreviation, and a street-type abbreviation do not count. */
 export function isAddressSearchEnabled(input: {
   mode: "address" | "parcel" | "permit";
   text: string;
@@ -50,7 +50,7 @@ export function reduceComboboxKey(state: ComboState, key: string): ComboAction {
 }
 
 function normSuggestQuery(value: string): string {
-  return foldAddressCase(value).replace(/\s+/g, " ");
+  return expandAddress(value).replace(/\s+/g, " ");
 }
 
 /**
