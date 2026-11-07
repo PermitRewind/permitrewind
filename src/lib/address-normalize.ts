@@ -125,17 +125,32 @@ export function compassAbbrev(token: string): string | null {
 
 /**
  * Letter case is not part of an address. Every compare of address text goes
- * through `sameAddressCase`. A line we echo back, because the map did not
- * standardize it, goes through `canonicalAddressCase` so any mix of upper
- * and lower case is one label.
+ * through `sameAddressCase`. A compass point and a street type also match
+ * their abbreviation and their spelled word, including a compass point placed
+ * before the name or after the street type. A line we echo back, because the
+ * map did not standardize it, goes through `canonicalAddressCase` so any mix
+ * of upper and lower case is one label.
  */
 export function foldAddressCase(value: string): string {
   return value.trim().toLowerCase();
 }
 
-/** True when both strings are the same address text aside from letter case. */
+/**
+ * The same street. Letter case does not count. SE, se, Southeast, and
+ * SOUTHEAST are one compass point, before the name or after the street type,
+ * and Circle, CIR, and CIRCLE are one street type. The same is true for the
+ * other compass points and for every street type in the shared tables.
+ * A different compass point or a different street type is a different street.
+ * Leaving the compass point or the street type off still matches the line
+ * that has it. A city, ZIP, or any other extra word does not.
+ */
 export function sameAddressCase(a: string, b: string): boolean {
-  return foldAddressCase(a) === foldAddressCase(b);
+  if (foldedAddress(a) === foldedAddress(b)) return true;
+  if (expandAddress(a) === expandAddress(b)) return true;
+  const left = streetParts(a);
+  const right = streetParts(b);
+  if (!left || !right) return false;
+  return sameStreetParts(left, right);
 }
 
 /**
@@ -346,6 +361,9 @@ export const STREET_TYPE_FALLBACK_CAP = 16;
 /** Suffixes parseAddressQuery accepts that the expand/abbrev maps do not list. */
 const EXTRA_COMPLETE_STREET_TYPES = new Set(["way", "loop", "run", "path", "cr", "circl"]);
 
+/** CR and CIRCL are the same road ending as Circle. The other extras are their own type. */
+const SUFFIX_CANON_EXTRA: Record<string, string> = { cr: "circle", circl: "circle" };
+
 const COMPLETE_STREET_TYPE_TOKENS = new Set<string>([
   ...Object.keys(STREET_TYPE_EXPAND),
   ...Object.keys(STREET_TYPE_ABBREV),
@@ -363,6 +381,133 @@ for (const tail of COMPOUND_TAILS) INCOMPLETE_STREET_TYPE_PREFIXES.delete(tail);
 
 function streetTypeLetters(token: string): string {
   return token.toLowerCase().replace(/[^a-z]/g, "");
+}
+
+function foldedAddress(value: string): string {
+  return foldAddressCase(value).replace(/\s+/g, " ");
+}
+
+/** One id for a finished street type. "Cir", "CIRCLE", and "CR" are "circle". */
+function canonicalSuffix(token: string): string | null {
+  const letters = streetTypeLetters(token);
+  if (!letters) return null;
+  if (SUFFIX_CANON_EXTRA[letters]) return SUFFIX_CANON_EXTRA[letters];
+  if (STREET_TYPE_EXPAND[letters]) return STREET_TYPE_EXPAND[letters];
+  if (letters in STREET_TYPE_ABBREV) return letters;
+  if (EXTRA_COMPLETE_STREET_TYPES.has(letters)) return letters;
+  return null;
+}
+
+function isTypeWord(word: string): boolean {
+  return canonicalSuffix(word) != null;
+}
+
+function hasStreetCore(words: string[]): boolean {
+  return words.some((word) => word && !compassAbbrev(word) && !isTypeWord(word));
+}
+
+function hasNameWord(words: string[]): boolean {
+  return words.some((word) => word && !isTypeWord(word));
+}
+
+function peelEdge(words: string[], edge: "start" | "end", keep: (rest: string[]) => boolean): { words: string[]; dir: string | null } {
+  if (words.length < 2) return { words, dir: null };
+  if (edge === "end") {
+    const pair = compassPairAbbrev(words[words.length - 2], words[words.length - 1]);
+    const pairRest = words.slice(0, -2);
+    if (pair && keep(pairRest)) return { words: pairRest, dir: pair };
+  } else {
+    const pair = compassPairAbbrev(words[0], words[1]);
+    const pairRest = words.slice(2);
+    if (pair && keep(pairRest)) return { words: pairRest, dir: pair };
+  }
+  const token = edge === "end" ? words[words.length - 1] : words[0];
+  const dir = compassAbbrev(token);
+  const rest = edge === "end" ? words.slice(0, -1) : words.slice(1);
+  if (dir && keep(rest)) return { words: rest, dir };
+  return { words, dir: null };
+}
+
+interface StreetParts {
+  number: string;
+  name: string;
+  suffix: string;
+  dirs: string[];
+  residue: string;
+}
+
+/** City, state, and ZIP sit beside the street so they do not become part of the name. */
+function splitLocality(value: string): { head: string; residue: string } {
+  const trimmed = value.replace(/\s+/g, " ").trim();
+  const comma = trimmed.indexOf(",");
+  let head = comma >= 0 ? trimmed.slice(0, comma).trim() : trimmed;
+  let tail = comma >= 0 ? trimmed.slice(comma + 1) : "";
+  const city = trailingKnownCity(head);
+  if (city) {
+    head = head.replace(new RegExp(`\\b${escapeRegExp(city)}\\s*$`, "i"), "").trim();
+    tail = `${city} ${tail}`.trim();
+  }
+  const zip = trimmed.match(/(?:^|[\s,])(\d{5})(?:-\d{4})?\s*$/)?.[1] ?? "";
+  head = head.replace(/\s+\d{5}(?:-\d{4})?\s*$/g, "").replace(/\b(?:florida|fl)\b/gi, " ").replace(/\s+/g, " ").trim();
+  const place = tail
+    .toLowerCase()
+    .replace(/[.,]/g, " ")
+    .replace(/\b\d{5}(?:-\d{4})?\b/g, " ")
+    .replace(/\b(?:florida|fl)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return { head, residue: [place, zip].filter(Boolean).join("|") };
+}
+
+/**
+ * House number, collapsed street name, street type, compass points, and
+ * whatever was left over (a city, a ZIP, or a stray word). Null when there
+ * is no house number and street name.
+ */
+function streetParts(value: string): StreetParts | null {
+  const { head, residue } = splitLocality(value);
+  const tokens = expandAddress(head).split(/[^a-z0-9]+/).filter(Boolean);
+  if (!tokens.length || !/^\d+[a-z]?$/.test(tokens[0])) return null;
+  const number = tokens[0];
+  let rest = tokens.slice(1);
+  const dirs: string[] = [];
+  const take = (edge: "start" | "end", keep: (words: string[]) => boolean) => {
+    const peeled = peelEdge(rest, edge, keep);
+    if (!peeled.dir) return;
+    rest = peeled.words;
+    dirs.push(peeled.dir);
+  };
+  take("end", hasNameWord);
+  take("start", hasStreetCore);
+  let suffix = "";
+  if (rest.length > 1) {
+    const canon = canonicalSuffix(rest[rest.length - 1]);
+    if (canon) {
+      suffix = canon;
+      rest = rest.slice(0, -1);
+    }
+  }
+  take("end", hasNameWord);
+  take("start", hasStreetCore);
+  const name = rest.join("");
+  if (!name) return null;
+  dirs.sort();
+  return { number, name, suffix, dirs, residue };
+}
+
+/**
+ * Same house and street name. Compass points and street types match across
+ * abbreviation and placement. When only one line names a compass point or a
+ * street type, the other line left it off. Two different ones do not match.
+ */
+function sameStreetParts(a: StreetParts, b: StreetParts): boolean {
+  if (a.number !== b.number || a.name !== b.name || a.residue !== b.residue) return false;
+  if (a.suffix && b.suffix && a.suffix !== b.suffix) return false;
+  if (a.dirs.length && b.dirs.length) {
+    if (a.dirs.length !== b.dirs.length) return false;
+    if (a.dirs.some((dir, index) => dir !== b.dirs[index])) return false;
+  }
+  return true;
 }
 
 /** "Dr", "Drive", "Cir", and "Way" are finished street types. "D" and "Stre" are not. */
@@ -820,6 +965,8 @@ function pushFuzzy(variants: string[], seen: Set<string>, variant: string | null
  * Expanded, then the raw input, then abbreviated, then near-matches.
  * Near-matches drop a trailing s on street-name tokens, correct a trailing
  * city typo, and only then add an s. Case-insensitive duplicates drop out.
+ * A mixed spelling such as "Circle SE" is the expanded line plus the
+ * abbreviated line, not a third lookup.
  */
 export function addressQueryVariants(query: string): string[] {
   const original = query.trim().replace(/\s+/g, " ").slice(0, 120);
@@ -827,7 +974,7 @@ export function addressQueryVariants(query: string): string[] {
   const seen = new Set<string>();
   const variants: string[] = [];
   const expanded = expandAddress(original);
-  for (const variant of [expanded, original, abbreviateAddress(original)]) {
+  for (const variant of [expanded, abbreviateAddress(original)]) {
     pushVariant(variants, seen, variant);
   }
   for (const variant of [...variants]) {
@@ -872,7 +1019,28 @@ export function highlightAddressLabel(label: string, query: string): { text: str
     }
   }
   const typed = foldAddressCase(query).split(/[^a-z0-9]+/).filter(Boolean);
+  for (const token of typed) {
+    const dir = compassAbbrev(token);
+    if (dir) {
+      forms.add(dir.toLowerCase());
+      const full = compassFull(dir);
+      if (full) forms.add(full.toLowerCase());
+    }
+    const suffix = canonicalSuffix(token);
+    if (suffix) {
+      forms.add(suffix);
+      const abbr = STREET_TYPE_ABBREV[suffix];
+      if (abbr) forms.add(abbr);
+    }
+  }
   for (let i = 0; i < typed.length - 1; i++) {
+    const pair = compassPairAbbrev(typed[i], typed[i + 1]);
+    if (pair) {
+      forms.add(pair.toLowerCase());
+      const full = compassFull(pair);
+      if (full) forms.add(full.toLowerCase());
+      continue;
+    }
     if (STREET_OR_DIRECTION.has(typed[i]) || STREET_OR_DIRECTION.has(typed[i + 1])) continue;
     forms.add(typed[i] + typed[i + 1]);
   }

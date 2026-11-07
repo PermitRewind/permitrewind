@@ -6,12 +6,15 @@ import { ProviderError, SearchMode } from "@/lib/types";
 /** JSON search endpoint for statewide Florida. The API key stays on the server. */
 export async function GET(req: NextRequest) {
   const s = req.nextUrl.searchParams;
-  const q = (s.get("q") ?? "").trim();
+  let q = (s.get("q") ?? "").trim();
   if (q.length < 2) return NextResponse.json({ error: "q must be at least 2 characters" }, { status: 400 });
   const mode = (["address", "parcel", "permit"].includes(s.get("mode") ?? "") ? s.get("mode") : "address") as SearchMode;
   if (mode === "address") {
     const gate = evaluateAddressSubmission(q, s.get("sel"));
     if (!gate.ok) return NextResponse.json({ error: gate.message }, { status: 422 });
+    // The signed line keeps the compass point and street type when the typed
+    // line abbreviated them or left one off. Permit matching uses that line.
+    q = gate.selection.street;
   }
   try {
     const result = await getProvider().search({

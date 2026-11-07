@@ -1398,6 +1398,360 @@ test("the same letters in any case produce the same suggestions and the signed s
   }
 });
 
+test("compass points and street types match across case, abbreviation, and placement", { concurrency: false }, async () => {
+  const compass = [
+    ["N", "North"],
+    ["S", "South"],
+    ["E", "East"],
+    ["W", "West"],
+    ["NE", "Northeast"],
+    ["NW", "Northwest"],
+    ["SE", "Southeast"],
+    ["SW", "Southwest"],
+  ];
+  for (const [abbr, full] of compass) {
+    assert.equal(sameAddressCase(`10 ${abbr} Oak St`, `10 ${full} Oak Street`), true, abbr);
+    assert.equal(sameAddressCase(`10 ${abbr.toLowerCase()} Oak ST`, `10 ${full.toUpperCase()} Oak street`), true, abbr);
+    assert.equal(sameAddressCase(`10 Oak ${abbr}`, `10 Oak ${full}`), true, `${abbr} after`);
+    assert.equal(sameAddressCase(`10 ${abbr} Oak St`, `10 Oak Street ${full}`), true, `${abbr} moved`);
+  }
+  assert.equal(sameAddressCase("10 South East Oak Street", "10 Oak St SE"), true);
+  assert.equal(sameAddressCase("10 N Oak St", "10 S Oak St"), false);
+  assert.equal(sameAddressCase("10 NE Oak Ave", "10 NW Oak Avenue"), false);
+  assert.equal(sameAddressCase("10 SE Oak St", "10 SW Oak Street"), false);
+  assert.equal(sameAddressCase("10 E Oak St", "10 W Oak St"), false);
+  assert.equal(sameAddressCase("10 East Main Street", "10 East Main Street W"), false);
+
+  const streetTypes = [
+    ["St", "Street"],
+    ["Dr", "Drive"],
+    ["Cir", "Circle"],
+    ["Rd", "Road"],
+    ["Ln", "Lane"],
+    ["Ct", "Court"],
+    ["Ave", "Avenue"],
+    ["Pl", "Place"],
+    ["Blvd", "Boulevard"],
+    ["Hwy", "Highway"],
+    ["Pkwy", "Parkway"],
+    ["Ter", "Terrace"],
+    ["Trl", "Trail"],
+  ];
+  for (const [abbr, full] of streetTypes) {
+    assert.equal(sameAddressCase(`10 Oak ${abbr}`, `10 Oak ${full}`), true, full);
+    assert.equal(sameAddressCase(`10 Oak ${abbr.toUpperCase()}`, `10 oak ${full.toLowerCase()}`), true, full);
+  }
+  assert.equal(sameAddressCase("3533 Sam Allen Oaks CR", "3533 Sam Allen Oaks Circle"), true);
+  assert.equal(sameAddressCase("10 Oak St", "10 Oak Dr"), false);
+  assert.equal(sameAddressCase("10 Oak Circle", "10 Oak Court"), false);
+  assert.equal(sameAddressCase("141 Browning Circle Southeast", "141 BROWNING CIR SE"), true);
+  assert.equal(sameAddressCase("141 Browning Circle Southeast", "141 SE Browning Cir"), true);
+  assert.equal(sameAddressCase("141 Browning Circle Southeast", "141 Browning Circle Southwest"), false);
+  assert.equal(sameAddressCase("141 Browning Circle Southeast", "141 Browning Circle Southeast, Winter Haven, FL 33884"), false);
+  assert.equal(sameAddressCase("3838 Whitedove Drive", "3838 WHITEDOVE DR"), true);
+  assert.equal(sameAddressCase("3838 Whitedove Drive", "3838 White Dove Dr"), true);
+  assert.equal(sameAddressCase("3838 Whitedove Drive", "3838 Whitedove Street"), false);
+  assert.equal(sameAddressCase("605 South Central Avenue", "605 S CENTRAL AVE"), true);
+  assert.equal(sameAddressCase("605 South Central Avenue", "605 East Central Avenue"), false);
+  assert.equal(sameAddressCase("605 South Central Avenue Bartow", "605 East Central Avenue Winter Haven"), false);
+  assert.equal(sameAddressCase("605 South Central Avenue", "605 S Central Ave Bartow"), false);
+
+  const foldPlan = (query: string) => suggestionQueryPlan(query).map((line) => line.toLowerCase().replace(/\s+/g, " ").trim());
+  const samePlan = (queries: string[]) => {
+    const [first, ...rest] = queries.map(foldPlan);
+    for (const plan of rest) assert.deepEqual(plan, first);
+  };
+  samePlan([
+    "141 Browning Circle Southeast",
+    "141 BROWNING CIRCLE SOUTHEAST",
+    "141 browning circle southeast",
+    "141 Browning Circle SE",
+    "141 BROWNING CIR SE",
+    "141 browning circle se",
+  ]);
+  samePlan(["141 Browning Cir", "141 BROWNING CIR", "141 browning CIRCLE"]);
+  samePlan(["3838 Whitedove Dr", "3838 WHITEDOVE DR", "3838 whitedove drive", "3838 whitedove DRIVE", "3838 WhiteDove Dr"]);
+  samePlan(["605 S Central Ave Bartow", "605 s CENTRAL ave bartow", "605 South Central Avenue Bartow", "605 SOUTH CENTRAL AVENUE BARTOW"]);
+  for (const fragment of ["3838 W", "3838 Wh"]) {
+    assert.equal(suggestionQueryPlan(fragment).some((q) => /\b(drive|street|circle|dr|st|cir)\b/i.test(q)), false, fragment);
+  }
+
+  const browningLabel = "141 Browning Circle Southeast, Winter Haven, FL 33884";
+  const southeastParts = highlightAddressLabel(browningLabel, "141 BROWNING CIR SE");
+  const southeastMatched = southeastParts.filter((part) => part.match).map((part) => part.text);
+  assert.ok(southeastMatched.includes("Browning"));
+  assert.ok(southeastMatched.includes("Circle"));
+  assert.ok(southeastMatched.includes("Southeast"));
+  const placed = highlightAddressLabel("141 SE Browning Circle, Winter Haven, FL 33884", "141 Browning Circle Southeast");
+  assert.ok(placed.some((part) => part.match && part.text === "SE"));
+  assert.ok(placed.some((part) => part.match && part.text === "Circle"));
+  const spaced = highlightAddressLabel(browningLabel, "141 Browning Circle South East");
+  assert.ok(spaced.some((part) => part.match && part.text === "Southeast"));
+  const driveParts = highlightAddressLabel("3838 Whitedove Drive, Lakeland, FL 33812", "3838 whitedove DRIVE");
+  assert.ok(driveParts.some((part) => part.match && part.text === "Drive"));
+  const centralParts = highlightAddressLabel("605 South Central Avenue, Bartow, FL 33830", "605 s CENTRAL ave");
+  assert.ok(centralParts.some((part) => part.match && part.text === "South"));
+  assert.ok(centralParts.some((part) => part.match && part.text === "Avenue"));
+
+  const keptSoutheast = { query: "141 Browning Circle Southeast", suggestions: [{ label: browningLabel }], status: "ok" };
+  for (const typed of ["141 BROWNING CIR SE", "141 browning circle se", "141 Browning Circle SE"]) {
+    const merged = mergeAddressSuggestResponse(keptSoutheast, { query: typed, suggestions: [], status: "throttled" });
+    assert.equal(merged.suggestions.length, 1, typed);
+    assert.equal(merged.status, "ok");
+  }
+  const keptDrive = { query: "3838 Whitedove", suggestions: [{ label: "3838 Whitedove Drive, Lakeland, FL 33812" }], status: "ok" };
+  const driveMerged = mergeAddressSuggestResponse(keptDrive, { query: "3838 WHITEDOVE DR", suggestions: [], status: "throttled" });
+  assert.equal(driveMerged.suggestions.length, 1);
+  assert.equal(addedStreetTypeKind("3838 Whitedove", "3838 WHITEDOVE DRIVE"), "complete");
+  assert.equal(addedStreetTypeKind("3838 Whitedove", "3838 Whitedove Stre"), "incomplete");
+  const unfinished = mergeAddressSuggestResponse(keptDrive, { query: "3838 Whitedove Stre", suggestions: [], status: "empty" });
+  assert.equal(unfinished.suggestions.length, 1);
+  const otherType = mergeAddressSuggestResponse(keptDrive, { query: "3838 Whitedove Street", suggestions: [], status: "empty" });
+  assert.equal(otherType.suggestions.length, 0);
+
+  const browning = {
+    address: { house_number: "141", road: "Browning Circle Southeast", city: "Winter Haven", county: "Polk County", state: "Florida", postcode: "33884" },
+  };
+  const southwest = {
+    address: { house_number: "141", road: "Browning Circle Southwest", city: "Winter Haven", county: "Polk County", state: "Florida", postcode: "33884" },
+  };
+  const northeast = {
+    address: { house_number: "141", road: "Browning Circle Northeast", city: "Winter Haven", county: "Polk County", state: "Florida", postcode: "33884" },
+  };
+  const dove = {
+    address: { house_number: "3838", road: "Whitedove Drive", city: "Lakeland", county: "Polk County", state: "Florida", postcode: "33812" },
+  };
+  const central = {
+    address: { house_number: "605", road: "South Central Avenue", city: "Bartow", county: "Polk County", state: "Florida", postcode: "33830" },
+  };
+  const eastCentral = {
+    address: { house_number: "605", road: "East Central Avenue", city: "Winter Haven", county: "Polk County", state: "Florida", postcode: "33880" },
+  };
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url);
+    const q = (url.searchParams.get("q") ?? "").toLowerCase();
+    const hit = /browning/.test(q) && /\b(southwest|sw)\b/.test(q)
+      ? southwest
+      : /browning/.test(q) && /\b(northeast|ne)\b/.test(q)
+        ? northeast
+        : /browning/.test(q)
+          ? browning
+          : /white ?dove/.test(q) && /\b(drive|dr)\b/.test(q)
+            ? dove
+            : /central/.test(q) && /\b(east|e)\b/.test(q)
+              ? eastCentral
+              : /central/.test(q)
+                ? central
+                : null;
+    return new Response(JSON.stringify(hit ? [hit] : []), { status: 200, headers: { "Content-Type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    async function labelsFor(queries: string[]) {
+      const labels: string[][] = [];
+      for (const typed of queries) {
+        const result = await suggestFloridaAddresses(typed, { minIntervalMs: 0, state: { lastAt: 0, cache: new Map() } });
+        assert.equal(result.status, "ok", typed);
+        assert.equal(result.suggestions.length, 1, typed);
+        labels.push(result.suggestions.map((row) => row.label));
+      }
+      for (const row of labels) assert.deepEqual(row, labels[0], row.join(" | "));
+      return labels[0];
+    }
+    assert.deepEqual(await labelsFor([
+      "141 Browning Cir",
+      "141 BROWNING CIR",
+      "141 browning CIRCLE",
+      "141 Browning Circle SE",
+      "141 BROWNING CIR SE",
+      "141 browning circle se",
+      "141 Browning Circle Southeast",
+      "141 BROWNING CIRCLE SOUTHEAST",
+      "141 browning circle southeast",
+    ]), [browningLabel]);
+    assert.deepEqual(await labelsFor([
+      "3838 Whitedove",
+      "3838 WHITEDOVE DR",
+      "3838 whitedove drive",
+      "3838 WhiteDove Dr",
+      "3838 whitedove DRIVE",
+    ]), ["3838 Whitedove Drive, Lakeland, FL 33812"]);
+    assert.deepEqual(await labelsFor([
+      "605 S Central Ave Bartow",
+      "605 s CENTRAL ave bartow",
+      "605 South Central Avenue Bartow",
+      "605 SOUTH CENTRAL AVENUE BARTOW",
+    ]), ["605 South Central Avenue, Bartow, FL 33830"]);
+    const otherQuadrant = await suggestFloridaAddresses("141 Browning Circle Southwest", { minIntervalMs: 0, state: { lastAt: 0, cache: new Map() } });
+    assert.equal(otherQuadrant.suggestions[0].label.includes("Southwest"), true);
+    assert.equal(otherQuadrant.suggestions[0].label.includes("Southeast"), false);
+    for (const fragment of ["3838 W", "3838 Wh"]) {
+      const result = await suggestFloridaAddresses(fragment, { minIntervalMs: 0, state: { lastAt: 0, cache: new Map() } });
+      assert.deepEqual(result.suggestions, [], fragment);
+    }
+  } finally {
+    globalThis.fetch = original;
+  }
+
+  const picked = {
+    label: browningLabel,
+    street: "141 Browning Circle Southeast",
+    city: "Winter Haven" as const,
+    state: "FL" as const,
+    zip: "33884",
+  };
+  process.env.ADDRESS_SELECTION_SECRET = "test-selection-secret";
+  const token = signAddressSelection(picked);
+  const acceptedStreets = [
+    "141 Browning Cir",
+    "141 BROWNING CIR",
+    "141 browning CIRCLE",
+    "141 Browning Circle SE",
+    "141 BROWNING CIR SE",
+    "141 browning circle se",
+    "141 Browning Circle Southeast",
+    "141 BROWNING CIRCLE SOUTHEAST",
+    "141 browning circle southeast",
+    "141 SE Browning Cir",
+    "141 Southeast Browning Circle",
+    "141 South East Browning Cir",
+  ];
+  for (const typed of acceptedStreets) {
+    assert.equal(evaluateAddressSubmission(typed, token).ok, true, typed);
+    assert.equal(isAddressSearchEnabled({ mode: "address", text: typed, selected: { label: picked.street, token } }), true, typed);
+  }
+  assert.equal(evaluateAddressSubmission(picked.label, token).ok, false);
+  assert.equal(evaluateAddressSubmission("141 Browning Circle Southwest", token).ok, false);
+  assert.equal(evaluateAddressSubmission("141 NE Browning Cir", token).ok, false);
+  assert.equal(evaluateAddressSubmission("141 Browning Drive", token).ok, false);
+  assert.equal(evaluateAddressSubmission("142 Browning Circle Southeast", token).ok, false);
+  assert.equal(evaluateAddressSubmission(picked.street, null).ok, false);
+  assert.equal(isAddressSearchEnabled({ mode: "address", text: "141 Browning Circle Southwest", selected: { label: picked.street, token } }), false);
+
+  const centralStreet = "605 South Central Avenue";
+  const centralToken = signAddressSelection({
+    label: "605 South Central Avenue, Bartow, FL 33830",
+    street: centralStreet,
+    city: "Bartow",
+    state: "FL",
+    zip: "33830",
+  });
+  for (const typed of ["605 S Central Ave", "605 s CENTRAL ave", "605 South Central Avenue", "605 SOUTH CENTRAL AVENUE", "605 Central Ave"]) {
+    assert.equal(evaluateAddressSubmission(typed, centralToken).ok, true, typed);
+    const parsed = parseAddressQuery(typed === "605 Central Ave" ? centralStreet : typed);
+    assert.equal(permitAddressMatches(parsed, { address: "605 CENTRAL", city: "Winter Haven" }, "Bartow"), false, typed);
+    assert.equal(permitAddressMatches(parsed, { address: "605 Central Ave E", city: "Winter Haven" }, "Bartow"), false, typed);
+    assert.equal(permitAddressMatches(parsed, { address: "605 E CENTRAL AVE", city: "WINTER HAVEN" }, "Bartow"), false, typed);
+  }
+  assert.equal(evaluateAddressSubmission("605 E Central Ave", centralToken).ok, false);
+  assert.equal(evaluateAddressSubmission("605 East Central Avenue", centralToken).ok, false);
+  assert.equal(evaluateAddressSubmission("605 South Central Avenue, Bartow, FL 33830", centralToken).ok, false);
+
+  function stackRow(partial: Record<string, unknown>) {
+    return {
+      id: "11111111-1111-4111-8111-111111111111",
+      permit_number: "X",
+      status: "final",
+      category: "ROOFING",
+      tags: [],
+      description_raw: "work",
+      address_street: "141 BROWNING CIR",
+      address_city: "WINTER HAVEN",
+      address_state: "FL",
+      address_zip: "33884",
+      jurisdiction_name: "City of Winter Haven",
+      date_issued: "2020-01-01",
+      ...partial,
+    };
+  }
+  process.env.PERMITSTACK_API_KEY = "test-key";
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url);
+    if (url.hostname !== "api.permit-stack.com") {
+      return new Response("<html></html>", { status: 200, headers: { "Content-Type": "text/html" } });
+    }
+    const address = url.searchParams.get("address") ?? "";
+    if (address === "141 Browning" || address === "141 Browning Cir") {
+      return new Response(JSON.stringify({
+        results: [
+          stackRow({ id: "aaaaaaa1-1111-4111-8111-111111111111", permit_number: "BT-2024-4680", address_street: "141 BROWNING CIR", date_issued: "2024-03-21" }),
+          stackRow({ id: "aaaaaaa2-2222-4222-8222-222222222222", permit_number: "BT-2022-1905", address_street: "141 BROWNING CIR", date_issued: "2022-02-04" }),
+          stackRow({ id: "aaaaaaa3-3333-4333-8333-333333333333", permit_number: "NE-OTHER", address_street: "141 NE BROWNING CIR", date_issued: "2019-01-01" }),
+        ],
+        total: 3,
+        page: 1,
+        per_page: 100,
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    if (/^141 (SE|Southeast) Browning( Cir)?$/.test(address)) {
+      return new Response(JSON.stringify({
+        results: [
+          stackRow({ id: "aaaaaaa5-5555-4555-8555-555555555555", permit_number: "BLD-H-148765", address_street: "141 SE BROWNING CIR", date_issued: "2011-09-19" }),
+        ],
+        total: 1,
+        page: 1,
+        per_page: 100,
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    if (/central/i.test(address)) {
+      return new Response(JSON.stringify({
+        results: [
+          stackRow({
+            id: "cccccccc-cccc-4ccc-8ccc-ccccccccccc1",
+            permit_number: "2019-00116512",
+            address_street: "605 CENTRAL",
+            address_city: "WINTER HAVEN",
+            address_zip: "33880",
+            jurisdiction_name: "City of Winter Haven",
+            date_issued: "2019-08-12",
+          }),
+          stackRow({
+            id: "cccccccc-cccc-4ccc-8ccc-ccccccccccc3",
+            permit_number: "WH-EAST",
+            address_street: "605 CENTRAL AVE E",
+            address_city: "WINTER HAVEN",
+            address_zip: "33880",
+            jurisdiction_name: "City of Winter Haven",
+            date_issued: "2019-08-12",
+          }),
+          stackRow({
+            id: "cccccccc-cccc-4ccc-8ccc-ccccccccccc4",
+            permit_number: "BT-EAST",
+            address_street: "605 E CENTRAL AVE",
+            address_city: "BARTOW",
+            address_zip: "33830",
+            jurisdiction_name: "City of Bartow",
+            date_issued: "2018-01-01",
+          }),
+        ],
+        total: 3,
+        page: 1,
+        per_page: 100,
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    return new Response(JSON.stringify({ results: [], total: 0, page: 1, per_page: 100 }), { status: 200, headers: { "Content-Type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    for (const typed of acceptedStreets) {
+      const res = await searchGET(new NextRequest(`http://localhost/api/search?mode=address&q=${encodeURIComponent(typed)}&sel=${encodeURIComponent(token)}&city=Winter%20Haven&state=FL&zip=33884&county=Polk`));
+      assert.equal(res.status, 200, typed);
+      const body = await res.json();
+      assert.deepEqual(body.permits.map((permit: { permitNumber: string }) => permit.permitNumber).sort(), ["BLD-H-148765", "BT-2022-1905", "BT-2024-4680"], typed);
+    }
+    const unsigned = await searchGET(new NextRequest(`http://localhost/api/search?mode=address&q=${encodeURIComponent("141 BROWNING CIR SE")}`));
+    assert.equal(unsigned.status, 422);
+    for (const typed of ["605 S Central Ave", "605 s CENTRAL ave", "605 SOUTH CENTRAL AVENUE", "605 Central Ave"]) {
+      const res = await searchGET(new NextRequest(`http://localhost/api/search?mode=address&q=${encodeURIComponent(typed)}&sel=${encodeURIComponent(centralToken)}&city=Bartow&state=FL&zip=33830&county=Polk`));
+      assert.equal(res.status, 200, typed);
+      const body = await res.json();
+      assert.deepEqual(body.permits, [], typed);
+      assert.equal(body.permits.some((permit: { permitNumber: string }) => permit.permitNumber === "2019-00116512"), false);
+    }
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
 test("suggest route source does not read the PermitStack key", () => {
   const route = readFileSync("src/app/api/address-suggest/route.ts", "utf8");
   const suggest = readFileSync("src/lib/address-suggest.ts", "utf8");

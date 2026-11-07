@@ -64,7 +64,10 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
     : null;
   if (query.q.trim().length >= 2 && !addressBlocked) {
     try {
-      result = await getProvider().search(query);
+      // The signed street keeps a compass point or street type the visitor
+      // retyped as an abbreviation, or left off. The box still shows what they typed.
+      const searched = selection ? { ...query, q: selection.street } : query;
+      result = await getProvider().search(searched);
     } catch (e) {
       error = e instanceof ProviderError ? e.message : "Unexpected error while searching permits.";
       console.error("search failed", e);

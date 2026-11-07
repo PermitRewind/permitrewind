@@ -351,7 +351,8 @@ export async function suggestFloridaAddresses(
 ): Promise<AddressSuggestResponse> {
   const query = raw.trim().slice(0, 120);
   const state = opts?.state ?? shared;
-  const key = foldAddressCase(query).replace(/\s+/g, " ");
+  // "Circle SE" and "Circle Southeast" are one lookup, so they share a cache entry.
+  const key = expandAddress(query).replace(/\s+/g, " ");
   if (query.length < ADDRESS_SUGGEST_MIN_CHARS) return empty(query, "empty");
   const cached = state.cache.get(key);
   if (cached) return { ...cached, query };
